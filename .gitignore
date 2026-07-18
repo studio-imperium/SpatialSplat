@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated SpatialSplat proof-of-concept artifacts
+poc_data/

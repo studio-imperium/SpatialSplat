@@ -1632,6 +1632,20 @@ class LatentSeqMMFlowModel(nn.Module):
         self.out_layer = nn.Linear(model_channels, out_channels)
         if cam_channels is not None:
             self.cam_out_layer = nn.Linear(model_channels, cam_channels)
+        self.gradient_checkpointing = False
+
+    def enable_gradient_checkpointing(self, enabled: bool = True) -> None:
+        self.gradient_checkpointing = enabled
+
+    def _run_refiner_block(self, block, repo_layer, hidden_states, mod):
+        def forward(value):
+            return block(value, mod=mod, rotary_emb=repo_layer(value))
+
+        if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
+            from torch.utils.checkpoint import checkpoint
+
+            return checkpoint(forward, hidden_states, use_reentrant=False)
+        return forward(hidden_states)
 
     @property
     def dtype(self) -> torch.dtype:
@@ -1661,10 +1675,14 @@ class LatentSeqMMFlowModel(nn.Module):
         h_x = h_x + self.pos_embedder(self.pos_pe).to(d)
 
         for i, block in enumerate(self.noise_refiner):
-            h_x = block(h_x, mod=t_mod, rotary_emb=self.noise_repo_layers[i](h_x))
+            h_x = self._run_refiner_block(
+                block, self.noise_repo_layers[i], h_x, t_mod
+            )
 
         for i, block in enumerate(self.context_refiner):
-            h_cond = block(h_cond, mod=None, rotary_emb=self.context_repo_layers[i](h_cond))
+            h_cond = self._run_refiner_block(
+                block, self.context_repo_layers[i], h_cond, None
+            )
 
         if self.cam_channels is not None:
             cam = x_t.get('camera').to(d)
@@ -1675,7 +1693,7 @@ class LatentSeqMMFlowModel(nn.Module):
             h = torch.cat([h, h_cam], dim=1)
 
         for i, block in enumerate(self.blocks):
-            h = block(h, mod=t_mod, rotary_emb=self.repo_layers[i](h))
+            h = self._run_refiner_block(block, self.repo_layers[i], h, t_mod)
 
         h_x = F.layer_norm(h[:, :z.shape[1]].float(), h.shape[-1:]).type(d)
         if self.cam_channels is not None:

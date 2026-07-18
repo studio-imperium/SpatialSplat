@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpatialSplat POC Viewer</title>
+  <style>
+    html, body, #viewer {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    #viewer canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #controls, #metrics, #legend, #status, #error {
+      position: fixed;
+      z-index: 1;
+      padding: 8px;
+      border: 1px solid;
+      background: white;
+    }
+
+    #controls { top: 8px; left: 8px; }
+    #metrics { top: 8px; right: 8px; border-collapse: collapse; }
+    #metrics th, #metrics td { padding: 3px 6px; text-align: left; }
+    #legend { bottom: 8px; left: 8px; }
+    #status, #error { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+    #error { color: red; }
+
+    .swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-left: 8px;
+    }
+
+    .grey { background: grey; }
+    .red { background: red; }
+    .cyan { background: cyan; }
+    #representation-legend { margin-left: 8px; }
+
+    @media (max-width: 600px) {
+      #metrics {
+        top: 76px;
+        left: 8px;
+        right: auto;
+      }
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.180.0/examples/jsm/",
+        "@sparkjsdev/spark": "https://unpkg.com/@sparkjsdev/spark@2.0.0/dist/spark.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="viewer"></div>
+
+  <div id="controls">
+    <label for="scene-select">Scene</label>
+    <select id="scene-select"></select>
+    <label for="variant-select">Result</label>
+    <select id="variant-select">
+      <option value="baseline">Baseline</option>
+      <option value="optimized">Optimized latent</option>
+    </select>
+    <label for="splat-mode">
+      <input id="splat-mode" type="checkbox" checked>
+      Actual splats
+    </label>
+    <button id="reset-camera" type="button">Reset camera</button>
+  </div>
+
+  <table id="metrics">
+    <tbody>
+      <tr><th>Spatial score</th><td id="spatial-score">-</td></tr>
+      <tr><th>Depth loss</th><td id="depth-loss">-</td></tr>
+      <tr><th>Mask IoU</th><td id="mask-iou">-</td></tr>
+      <tr><th>Median depth error</th><td id="median-depth">-</td></tr>
+      <tr><th>P95 depth error</th><td id="p95-depth">-</td></tr>
+    </tbody>
+  </table>
+
+  <div id="legend">
+    <span class="swatch grey"></span> primitives
+    <span class="swatch red"></span> exact edges
+    <span id="representation-legend"><span class="swatch cyan"></span> points</span>
+  </div>
+
+  <div id="status">Loading...</div>
+  <div id="error" hidden></div>
+
+  <script type="module" src="poc_viewer.js"></script>
+</body>
+</html>

@@ -1009,3 +1009,68 @@ P95 was `1.0925` versus `1.0779`. Base scored `0.6384`; Geometry Control was
 best at `0.5901`. Simple weight compression therefore preserves much of the
 LoRA behavior but does not isolate a quality-preserving transform mechanism.
 The complete record is `poc_data/rank2_space_smoke/spatial_metrics.json`.
+
+## Scheduled Geometry Control Probe (2026-07-19)
+
+Geometry control can now stop before the flow sampler finishes. The hosted
+default applies control for the first 70% of steps and passes `control=None`
+for the final 30%, giving the unmodified Phase 2 model six cleanup steps in a
+20-step run. The Space exposes both cutoff (`0` to `1`) and control strength
+(`0` to `15`); cutoff `1` reproduces the original always-on path.
+
+On Cylinder Droid at seed 42 and control strength 1, scheduled control changed
+Geometry Control structure loss from `0.5901` to `0.5958` and worst-view P95
+from `0.8380` to `0.8354`. Combined LoRA plus Control was essentially flat in
+structure loss (`0.6024` to `0.6023`) while P95 worsened from `0.9079` to
+`0.9220`. This proves the schedule works but does not show a quality gain at
+the trained strength. Strong-early-control sweeps are the next useful test.
+The scheduled result is in `poc_data/early_control_space_smoke`.
+
+## Procedural Six-View LoRA Probe (2026-07-20)
+
+This experiment tests whether exact primitive renders can scale spatial target
+generation without relying on one generated-image camera. The deterministic
+dataset in `poc_data/procedural_multiview` contains 20 scenes across ten shape
+families. Each scene provides one isometric RGBA Phase 2 input plus exact RGB,
+depth, mask, boundary, and primitive-ID supervision from isometric, top, left,
+right, front, and back cameras. The frozen split is 12 train, 4 validation, and
+4 test scenes.
+
+Latent optimization now combines six-view structure loss with premultiplied
+RGB anchoring and fixed-anchor feature, opacity, scale, and effective-density
+preservation. A weak density penalty allowed one robot target to shrink its
+effective Gaussian mass while improving geometry, so the final run uses
+weight `5.0` and a `0.98` minimum-density ratio. The stricter robot target kept
+the RGB match, retained density, and still improved fresh structure by 20.9%.
+The procedural manifest can explicitly skip the older realistic-data support
+gate while retaining six-view depth, IoU, visual, opacity, and density checks.
+
+The first fresh rank-4 LoRA trained for 400 steps on 10 accepted train targets.
+Its fixed flow probe improved 9.0%, but the untouched four-scene test was
+negative: two wins, median structure change -6.6%, and mean change -35.8% due
+to a large cluster regression. No accepted cluster or stairs target existed in
+that training set.
+
+A second fresh rank-4 LoRA trained for 300 steps on 12 accepted
+train/validation targets, adding quality-gated cluster and stairs examples
+while continuing to exclude all four test scenes. Its fixed flow probe
+improved 7.6%. On the same paired seed-101 test it won 3/4 scenes: stairs
+improved 15.9%, table 4.4%, and tower 4.7%. Cluster still regressed 48.8%, so
+median improvement was +4.5% but mean improvement remained -6.0%. Mean P95
+depth was also slightly worse (`0.3057` to `0.3118`).
+
+This is useful evidence that exact six-view procedural targets can teach
+transferable corrections, but 12 accepted examples are not enough for robust
+family generalization. Do not replace the existing diverse LoRA with this
+adapter. Scale scene-family coverage, use multiple held-out seeds, and require
+both mean structure and P95 wins before promoting a future version.
+
+Artifacts:
+
+- generator: `training/generate_procedural_multiview_data.py`
+- visual and density losses: `training/visual_anchor_loss.py`
+- final adapter: `poc_data/procedural_multiview_lora_v2`
+- first and second paired tests: `poc_data/procedural_lora_test_eval` and
+  `poc_data/procedural_lora_v2_test_eval`
+- hosted experimental mode:
+  `https://huggingface.co/spaces/WilliamQM/Spatial-Splat`

@@ -34,6 +34,7 @@ PLY_TO_WORLD_ROTATION = (
 class TorchGaussianDepthRender:
     depth: torch.Tensor
     alpha: torch.Tensor
+    rgb: torch.Tensor | None = None
 
 
 def quaternion_matrices(quaternions: torch.Tensor) -> torch.Tensor:
@@ -138,8 +139,9 @@ def render_gaussian_tensors(
     world_scale: float = MODEL_WORLD_SCALE,
     world_translation: tuple[float, float, float] = MODEL_WORLD_TRANSLATION,
     minimum_pixel_sigma: float = 0.35,
+    colors: torch.Tensor | None = None,
 ) -> TorchGaussianDepthRender:
-    """Rasterize differentiable alpha and expected camera-space depth."""
+    """Rasterize differentiable alpha, depth, and optional RGB."""
     if not means.is_cuda:
         raise ValueError("gsplat rendering requires CUDA tensors")
     from gsplat.rendering import rasterization
@@ -155,17 +157,22 @@ def render_gaussian_tensors(
     viewmats, intrinsics = orthographic_camera_tensors(
         camera, width, height, means.device
     )
-    rendered_depth, rendered_alpha, _ = rasterization(
+    render_rgb = colors is not None
+    raster_colors = (
+        colors.to(device=means.device, dtype=torch.float32).clamp(0.0, 1.0)
+        if render_rgb
+        else torch.zeros(
+            (world_means.shape[0], 1),
+            device=world_means.device,
+            dtype=torch.float32,
+        )
+    )
+    rendered, rendered_alpha, _ = rasterization(
         means=world_means,
         quats=None,
         scales=None,
         opacities=opacities.reshape(-1).to(dtype=torch.float32).clamp(0.0, 0.999),
-        # gsplat 1.5 validates a color tensor even for depth-only modes.
-        colors=torch.zeros(
-            (world_means.shape[0], 1),
-            device=world_means.device,
-            dtype=torch.float32,
-        ),
+        colors=raster_colors,
         viewmats=viewmats,
         Ks=intrinsics,
         width=width,
@@ -173,13 +180,16 @@ def render_gaussian_tensors(
         near_plane=1e-4,
         eps2d=minimum_pixel_sigma**2,
         packed=True,
-        render_mode="ED",
+        render_mode="RGB+ED" if render_rgb else "ED",
         camera_model="ortho",
         covars=world_covariances,
     )
+    rendered_rgb = rendered[0, ..., :3] if render_rgb else None
+    rendered_depth = rendered[0, ..., -1 if render_rgb else 0]
     return TorchGaussianDepthRender(
-        depth=rendered_depth[0, ..., 0],
+        depth=rendered_depth,
         alpha=rendered_alpha[0, ..., 0],
+        rgb=rendered_rgb,
     )
 
 
@@ -188,7 +198,11 @@ def render_decoder_gaussian(
     camera: OrthographicCamera,
     width: int,
     height: int,
+    render_rgb: bool = False,
 ) -> TorchGaussianDepthRender:
+    colors = None
+    if render_rgb:
+        colors = gaussian._features_dc[:, 0, :] * 0.28209479177387814 + 0.5
     return render_gaussian_tensors(
         means=gaussian.get_xyz,
         scales=gaussian.get_scaling,
@@ -197,4 +211,5 @@ def render_decoder_gaussian(
         camera=camera,
         width=width,
         height=height,
+        colors=colors,
     )

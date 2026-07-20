@@ -37,6 +37,23 @@ MODEL_TO_WORLD_ROTATION = (
 )
 
 
+def control_scale_for_step(
+    control_scale: float,
+    step_index: int,
+    total_steps: int,
+    control_end: float,
+) -> float:
+    """Apply geometry control early, then disable it for final cleanup steps."""
+    if total_steps <= 0:
+        raise ValueError("total_steps must be positive")
+    if not 0.0 <= control_end <= 1.0:
+        raise ValueError("control_end must be between 0 and 1")
+    if not 0 <= step_index < total_steps:
+        raise ValueError("step_index must identify a sampling step")
+    active_steps = math.ceil(total_steps * control_end)
+    return float(control_scale) if step_index < active_steps else 0.0
+
+
 def _scene_dict(scene: str | Path | dict[str, Any]) -> dict[str, Any]:
     if isinstance(scene, dict):
         return scene

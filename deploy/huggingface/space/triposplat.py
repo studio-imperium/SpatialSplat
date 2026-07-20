@@ -6,6 +6,8 @@ from PIL import Image, ImageFilter
 from torchvision import transforms
 from tqdm.auto import tqdm
 
+from spatial_control import control_scale_for_step
+
 from model import (
     DinoV3ViT, Flux2VAEEncoder, BiRefNet,
     OctreeProbabilityFixedlenDecoder, ElasticGaussianFixedlenDecoder,
@@ -339,16 +341,20 @@ class FlowEulerCfgSampler:
     @torch.no_grad()
     def sample(self, model, noise, cond, neg_cond, steps=50, shift=1.0,
                guidance_scale=None, show_progress=False, callback=None,
-               control=None, control_scale=1.0):
+               control=None, control_scale=1.0, control_end=1.0):
         sample = noise
         t_seq = shift * np.linspace(1, 0, steps + 1) / (1 + (shift - 1) * np.linspace(1, 0, steps + 1))
         t_pairs = list(zip(t_seq[:-1], t_seq[1:]))
         iterator = tqdm(t_pairs, desc="Sampling", total=steps) if show_progress else t_pairs
         for i, (t, t_prev) in enumerate(iterator):
             x_t = {k: v.clone() for k, v in sample.items()} if isinstance(sample, dict) else sample.clone()
+            step_control_scale = control_scale_for_step(
+                control_scale, i, steps, control_end
+            )
             pred_v = self._cfg_prediction(
                 model, x_t, t, cond, neg_cond, guidance_scale,
-                control=control, control_scale=control_scale,
+                control=control if step_control_scale != 0.0 else None,
+                control_scale=step_control_scale,
             )
             dt = t - t_prev
             if isinstance(sample, dict):
@@ -504,7 +510,8 @@ def sample_latent(flow_model: LatentSeqMMFlowModel, cond: dict,
                   steps: int = 50, guidance_scale: float = 7.0, shift: float = 3.0,
                   generator: torch.Generator = None,
                   show_progress: bool = False, callback=None,
-                  control: torch.Tensor = None, control_scale: float = 1.0) -> dict:
+                  control: torch.Tensor = None, control_scale: float = 1.0,
+                  control_end: float = 1.0) -> dict:
     device = flow_model.device
     neg_cond = {k: torch.zeros_like(v) for k, v in cond.items()}
     noise = {'latent': torch.randn(1, flow_model.q_token_length, flow_model.in_channels,
@@ -516,7 +523,8 @@ def sample_latent(flow_model: LatentSeqMMFlowModel, cond: dict,
     return sampler.sample(flow_model, noise, cond=cond, neg_cond=neg_cond,
                           steps=steps, guidance_scale=guidance_scale, shift=shift,
                           show_progress=show_progress, callback=callback,
-                          control=control, control_scale=control_scale)
+                          control=control, control_scale=control_scale,
+                          control_end=control_end)
 
 
 # ---------------------------------------------------------------------------
@@ -542,11 +550,13 @@ class TripoSplatPipeline:
     def sample_latent(self, cond: dict, steps: int = 50, guidance_scale: float = 7.0,
                       shift: float = 3.0, generator: torch.Generator = None,
                       show_progress: bool = False, callback=None,
-                      control: torch.Tensor = None, control_scale: float = 1.0) -> dict:
+                      control: torch.Tensor = None, control_scale: float = 1.0,
+                      control_end: float = 1.0) -> dict:
         return sample_latent(self.flow_model, cond, steps=steps, guidance_scale=guidance_scale,
                              shift=shift, generator=generator,
                              show_progress=show_progress, callback=callback,
-                             control=control, control_scale=control_scale)
+                             control=control, control_scale=control_scale,
+                             control_end=control_end)
 
     def decode_latent(self, latent: torch.Tensor, num_gaussians: int = 262144):
         return self.decoder.decode(latent, num_gaussians=num_gaussians)

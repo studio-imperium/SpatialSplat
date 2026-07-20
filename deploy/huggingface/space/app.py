@@ -1,6 +1,7 @@
 """Private ZeroGPU comparison harness for Spatial Splat adapters."""
 
 import json
+import math
 from pathlib import Path
 import threading
 import time
@@ -48,6 +49,10 @@ LOW_RANK_LORA = (
     Path("adapter/flow_lora_rank2.safetensors"),
     Path("adapter/flow_lora_rank2_config.json"),
 )
+PROCEDURAL_LORA = (
+    Path("adapter/flow_lora_procedural.safetensors"),
+    Path("adapter/flow_lora_procedural_config.json"),
+)
 CONTROL_CONFIG = load_spatial_control(
     PIPE.flow_model,
     "adapter/spatial_control.safetensors",
@@ -66,6 +71,7 @@ MODES = (
     ("base", "Base TripoSplat", None, False),
     ("lora", "Spatial LoRA", FULL_LORA, False),
     ("low_rank", "Rank-2 Spatial LoRA", LOW_RANK_LORA, False),
+    ("procedural", "Procedural Six-View LoRA", PROCEDURAL_LORA, False),
     ("control", "Geometry Control", None, True),
     ("combined", "LoRA + Geometry Control", FULL_LORA, True),
 )
@@ -105,7 +111,7 @@ def _viewer_iframe(ply_path: Path, scene_path: Path) -> str:
     )
     return (
         f"<iframe src='{src}' "
-        "style='width:100%;height:460px;border:1px solid #999;background:#fff'></iframe>"
+        "style='width:100%;height:460px;border:1px solid #999;background:#1e1e1e'></iframe>"
     )
 
 
@@ -142,6 +148,7 @@ def generate_comparison(
     steps: int,
     guidance_scale: float,
     control_scale: float,
+    control_end: float,
     num_gaussians: str,
     output_format: str,
     progress=gr.Progress(track_tqdm=True),
@@ -195,6 +202,7 @@ def generate_comparison(
                 show_progress=True,
                 control=control if use_control else None,
                 control_scale=float(control_scale),
+                control_end=float(control_end),
             )
             progress((index + 0.85) / len(MODES), desc=f"Decoding {label}")
             gaussian = PIPE.decode_latent(
@@ -227,6 +235,13 @@ def generate_comparison(
                 "schema_version": 1,
                 "render_size": score_targets["render_size"],
                 "views": ["isometric", "top", "left", "right", "front", "back"],
+                "control_schedule": {
+                    "scale": float(control_scale),
+                    "end_fraction": float(control_end),
+                    "active_steps": math.ceil(int(steps) * float(control_end)),
+                    "base_only_steps": int(steps)
+                    - math.ceil(int(steps) * float(control_end)),
+                },
                 "modes": metric_results,
             },
             indent=2,
@@ -235,6 +250,8 @@ def generate_comparison(
         encoding="utf-8",
     )
     info = "\n".join(result_lines)
+    active_steps = math.ceil(int(steps) * float(control_end))
+    info += f"\nControl: {active_steps} steps on, {int(steps) - active_steps} steps off"
     info += f"\nTotal: {time.time() - started:.1f}s"
     return prepared, *viewers, *downloads, metrics_html(metric_results), str(metrics_path), info
 
@@ -267,16 +284,23 @@ with gr.Blocks(title="Spatial Splat") as demo:
         )
         control_input = gr.Slider(
             0.0,
-            2.0,
+            15.0,
             value=float(CONTROL_CONFIG.get("default_control_scale", 1.0)),
-            step=0.1,
+            step=0.25,
             label="Geometry control",
+        )
+        control_end_input = gr.Slider(
+            0.0,
+            1.0,
+            value=0.7,
+            step=0.05,
+            label="Control ends",
         )
         gaussians_input = gr.Dropdown(
             ["32768", "65536", "131072"], value="32768", label="Gaussians"
         )
         format_input = gr.Radio(["ply", "splat"], value="ply", label="Download")
-        generate_button = gr.Button("Run five-way comparison", variant="primary")
+        generate_button = gr.Button("Run six-way comparison", variant="primary")
 
     viewer_outputs = []
     file_outputs = []
@@ -309,6 +333,7 @@ with gr.Blocks(title="Spatial Splat") as demo:
             steps_input,
             guidance_input,
             control_input,
+            control_end_input,
             gaussians_input,
             format_input,
         ],

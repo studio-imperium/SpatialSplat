@@ -30,6 +30,10 @@ from training.structure_metrics import (
     structure_view_metrics,
     support_primitive_ids,
 )
+from training.visual_anchor_loss import (
+    gaussian_preservation_loss,
+    visual_anchor_loss,
+)
 
 
 def _checkpoint(root: Path, relative: str) -> str:
@@ -138,6 +142,17 @@ def _resize_target(
     return coarse_depth, coarse_mask
 
 
+def _resize_rgb(rgb: torch.Tensor, size: int) -> torch.Tensor:
+    if rgb.shape[:2] == (size, size):
+        return rgb
+    return F.interpolate(
+        rgb.permute(2, 0, 1)[None],
+        size=(size, size),
+        mode="bilinear",
+        align_corners=False,
+    )[0].permute(1, 2, 0)
+
+
 def _numpy_metrics(
     target_depth: torch.Tensor,
     target_mask: torch.Tensor,
@@ -165,6 +180,7 @@ def _render_metrics(
     views: dict[str, dict],
     size: int,
     config: SpatialLossConfig,
+    render_rgb: bool = False,
 ):
     with torch.no_grad():
         gaussian = decode_fixed_anchors(decoder, latent, anchors)
@@ -172,7 +188,7 @@ def _render_metrics(
         metrics = {}
         for name, view in views.items():
             rendered = render_decoder_gaussian(
-                gaussian, view["camera"], size, size
+                gaussian, view["camera"], size, size, render_rgb=render_rgb
             )
             resized_depth, resized_mask = _resize_target(
                 view["depth"], view["mask"], size
@@ -190,12 +206,46 @@ def _render_metrics(
     return gaussian, renders, aggregate_structure_metrics(metrics), metrics
 
 
+def _mean_visual_loss(
+    renders: dict[str, object], views: dict[str, dict], size: int
+) -> float | None:
+    losses = []
+    for name, rendered in renders.items():
+        if rendered.rgb is None:
+            return None
+        _, target_mask = _resize_target(
+            views[name]["depth"], views[name]["mask"], size
+        )
+        losses.append(
+            visual_anchor_loss(
+                _resize_rgb(views[name]["rgb"], size),
+                target_mask,
+                rendered.rgb,
+                rendered.alpha,
+            )
+        )
+    return float(torch.stack(losses).mean())
+
+
+def _gaussian_quality(gaussian) -> dict[str, float]:
+    opacity = gaussian.get_opacity.float().reshape(-1)
+    scale = gaussian.get_scaling.float()
+    mass = opacity * scale.prod(dim=-1)
+    return {
+        "opacity_sum": float(opacity.sum()),
+        "mean_opacity": float(opacity.mean()),
+        "effective_density_mass": float(mass.sum()),
+        "mean_scale": float(scale.mean()),
+    }
+
+
 def _write_render_artifacts(
     scene_dir: Path,
     prefix: str,
     depth: torch.Tensor,
     alpha: torch.Tensor,
     boundary_path: Path,
+    rgb: torch.Tensor | None = None,
 ) -> None:
     depth_np = depth.detach().cpu().numpy().astype(np.float32)
     alpha_np = alpha.detach().cpu().numpy().astype(np.float32)
@@ -210,6 +260,11 @@ def _write_render_artifacts(
     _alignment_overlay(scene_dir, alpha_np, boundary_path).save(
         scene_dir / f"{prefix}_alignment_overlay.png"
     )
+    if rgb is not None:
+        rgb_np = np.clip(
+            np.round(rgb.detach().cpu().numpy() * 255), 0, 255
+        ).astype(np.uint8)
+        Image.fromarray(rgb_np, mode="RGB").save(scene_dir / f"{prefix}_rgb.png")
 
 
 def _improvement(before: dict[str, float], after: dict[str, float]) -> float:
@@ -234,6 +289,12 @@ def main() -> None:
     parser.add_argument("--optimization-steps", type=int, default=60)
     parser.add_argument("--learning-rate", type=float, default=1e-2)
     parser.add_argument("--prior-weight", type=float, default=0.05)
+    parser.add_argument("--visual-weight", type=float, default=0.0)
+    parser.add_argument("--feature-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--opacity-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--scale-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--density-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--minimum-density-ratio", type=float, default=0.95)
     parser.add_argument("--gradient-clip", type=float, default=1.0)
     parser.add_argument("--anchor-seed", type=int, default=1234)
     parser.add_argument("--resample-every", type=int, default=20)
@@ -265,6 +326,9 @@ def main() -> None:
             ),
             "mask": torch.from_numpy(
                 np.asarray(Image.open(spec.mask_path).convert("L")).copy() / 255.0
+            ).to(device=device, dtype=torch.float32),
+            "rgb": torch.from_numpy(
+                np.asarray(Image.open(spec.rgb_path).convert("RGB")).copy() / 255.0
             ).to(device=device, dtype=torch.float32),
             "boundary_path": spec.boundary_path,
             "primitive_ids": np.load(spec.ids_path),
@@ -316,18 +380,28 @@ def main() -> None:
             torch.from_numpy(support_mask_np).to(device=device),
             args.render_size,
         )
-        train_targets[name] = (depth, mask, object_mask, support_mask)
+        train_targets[name] = (
+            depth,
+            mask,
+            object_mask,
+            support_mask,
+            _resize_rgb(view["rgb"], args.render_size),
+        )
 
     anchors = sample_fixed_anchors(
         decoder, base_latent, args.num_gaussians, args.anchor_seed
     )
-    _, baseline_renders, baseline_train_metrics, baseline_train_views = _render_metrics(
+    reference_gaussian, baseline_renders, baseline_train_metrics, baseline_train_views = _render_metrics(
         decoder,
         base_latent,
         anchors,
         views,
         args.render_size,
         config,
+        render_rgb=args.visual_weight > 0,
+    )
+    baseline_visual_loss = _mean_visual_loss(
+        baseline_renders, views, args.render_size
     )
     print(
         f"Multi-view baseline loss: {baseline_train_metrics['spatial_loss']:.6f}",
@@ -347,6 +421,10 @@ def main() -> None:
             anchors = sample_fixed_anchors(
                 decoder, latent, args.num_gaussians, current_anchor_seed
             )
+            with torch.no_grad():
+                reference_gaussian = decode_fixed_anchors(
+                    decoder, base_latent, anchors
+                )
         else:
             current_anchor_seed = args.anchor_seed + (
                 step // args.resample_every * args.resample_every
@@ -359,15 +437,21 @@ def main() -> None:
             decoder, latent, anchors, activation_checkpoint=True
         )
         view_losses = {}
+        visual_losses = {}
         for name, view in views.items():
             rendered = render_decoder_gaussian(
-                gaussian, view["camera"], args.render_size, args.render_size
+                gaussian,
+                view["camera"],
+                args.render_size,
+                args.render_size,
+                render_rgb=args.visual_weight > 0,
             )
             (
                 target_depth_train,
                 target_mask_train,
                 object_mask_train,
                 support_mask_train,
+                target_rgb_train,
             ) = train_targets[name]
             view_losses[name] = structure_loss_torch(
                 target_depth_train,
@@ -378,17 +462,48 @@ def main() -> None:
                 rendered.alpha,
                 config,
             )
+            if args.visual_weight > 0:
+                if rendered.rgb is None:
+                    raise RuntimeError("RGB rendering was requested but not returned")
+                visual_losses[name] = visual_anchor_loss(
+                    target_rgb_train,
+                    target_mask_train,
+                    rendered.rgb,
+                    rendered.alpha,
+                )
         losses = {
             key: torch.stack([item[key] for item in view_losses.values()]).mean()
             for key in next(iter(view_losses.values()))
         }
-        current_spatial_loss = float(losses["spatial_loss"].detach())
-        if current_spatial_loss < best_loss and np.isfinite(current_spatial_loss):
-            best_loss = current_spatial_loss
+        visual_loss = (
+            torch.stack(list(visual_losses.values())).mean()
+            if visual_losses
+            else losses["spatial_loss"] * 0
+        )
+        preservation = gaussian_preservation_loss(
+            gaussian,
+            reference_gaussian,
+            minimum_density_ratio=args.minimum_density_ratio,
+        )
+        objective_loss = (
+            losses["spatial_loss"]
+            + args.visual_weight * visual_loss
+            + args.feature_preservation_weight
+            * preservation["feature_preservation_loss"]
+            + args.opacity_preservation_weight
+            * preservation["opacity_preservation_loss"]
+            + args.scale_preservation_weight
+            * preservation["scale_preservation_loss"]
+            + args.density_preservation_weight
+            * preservation["density_preservation_loss"]
+        )
+        prior_loss = F.mse_loss(latent, base_latent)
+        total_loss = objective_loss + args.prior_weight * prior_loss
+        current_total_loss = float(total_loss.detach())
+        if current_total_loss < best_loss and np.isfinite(current_total_loss):
+            best_loss = current_total_loss
             best_latent = latent.detach().cpu().clone()
             best_anchor_seed = current_anchor_seed
-        prior_loss = F.mse_loss(latent, base_latent)
-        total_loss = losses["spatial_loss"] + args.prior_weight * prior_loss
         total_loss.backward(retain_graph=True)
         nonfinite_gradient_values = 0
         stable_gradient_fallback = False
@@ -400,7 +515,17 @@ def main() -> None:
                 stable_gradient_fallback = True
                 optimizer.zero_grad(set_to_none=True)
                 stable_total_loss = (
-                    losses["whole_spatial_loss"] + args.prior_weight * prior_loss
+                    losses["whole_spatial_loss"]
+                    + args.visual_weight * visual_loss
+                    + args.feature_preservation_weight
+                    * preservation["feature_preservation_loss"]
+                    + args.opacity_preservation_weight
+                    * preservation["opacity_preservation_loss"]
+                    + args.scale_preservation_weight
+                    * preservation["scale_preservation_loss"]
+                    + args.density_preservation_weight
+                    * preservation["density_preservation_loss"]
+                    + args.prior_weight * prior_loss
                 )
                 stable_total_loss.backward()
                 if latent.grad is not None:
@@ -415,6 +540,20 @@ def main() -> None:
             "anchor_seed": current_anchor_seed,
             "total_loss": float(total_loss.detach()),
             "spatial_loss": float(losses["spatial_loss"].detach()),
+            "visual_loss": float(visual_loss.detach()),
+            "feature_preservation_loss": float(
+                preservation["feature_preservation_loss"].detach()
+            ),
+            "opacity_preservation_loss": float(
+                preservation["opacity_preservation_loss"].detach()
+            ),
+            "scale_preservation_loss": float(
+                preservation["scale_preservation_loss"].detach()
+            ),
+            "density_preservation_loss": float(
+                preservation["density_preservation_loss"].detach()
+            ),
+            "density_ratio": float(preservation["density_ratio"].detach()),
             "depth_loss": float(losses["depth_loss"].detach()),
             "mask_loss": float(losses["mask_loss"].detach()),
             "soft_iou": float(losses["soft_iou"].detach()),
@@ -438,6 +577,8 @@ def main() -> None:
             print(
                 f"step {step + 1:03d}/{args.optimization_steps}: "
                 f"spatial={record['spatial_loss']:.6f} "
+                f"visual={record['visual_loss']:.6f} "
+                f"density={record['density_ratio']:.3f} "
                 f"prior={record['prior_loss']:.6f} "
                 f"grad={record['gradient_norm']:.4f} "
                 f"nonfinite_grad={record['nonfinite_gradient_values']} "
@@ -450,6 +591,10 @@ def main() -> None:
             rendered,
             losses,
             view_losses,
+            visual_losses,
+            visual_loss,
+            preservation,
+            objective_loss,
             prior_loss,
             total_loss,
             stable_total_loss,
@@ -483,6 +628,7 @@ def main() -> None:
         views,
         args.final_render_size,
         config,
+        render_rgb=args.visual_weight > 0,
     )
     target_fixed_g, target_fixed_r, target_fixed_m, target_fixed_views = _render_metrics(
         decoder,
@@ -491,6 +637,7 @@ def main() -> None:
         views,
         args.final_render_size,
         config,
+        render_rgb=args.visual_weight > 0,
     )
     base_fresh_g, base_fresh_r, base_fresh_m, base_fresh_views = _render_metrics(
         decoder,
@@ -499,6 +646,7 @@ def main() -> None:
         views,
         args.final_render_size,
         config,
+        render_rgb=args.visual_weight > 0,
     )
     target_fresh_g, target_fresh_r, target_fresh_m, target_fresh_views = _render_metrics(
         decoder,
@@ -507,6 +655,7 @@ def main() -> None:
         views,
         args.final_render_size,
         config,
+        render_rgb=args.visual_weight > 0,
     )
 
     base_fresh_g.save_ply(scene_dir / "local_base_splat.ply")
@@ -520,6 +669,7 @@ def main() -> None:
             base_fresh_r[name].depth,
             base_fresh_r[name].alpha,
             view["boundary_path"],
+            base_fresh_r[name].rgb,
         )
         _write_render_artifacts(
             scene_dir,
@@ -527,7 +677,23 @@ def main() -> None:
             target_fresh_r[name].depth,
             target_fresh_r[name].alpha,
             view["boundary_path"],
+            target_fresh_r[name].rgb,
         )
+
+    base_fixed_visual = _mean_visual_loss(
+        base_fixed_r, views, args.final_render_size
+    )
+    target_fixed_visual = _mean_visual_loss(
+        target_fixed_r, views, args.final_render_size
+    )
+    base_fresh_visual = _mean_visual_loss(
+        base_fresh_r, views, args.final_render_size
+    )
+    target_fresh_visual = _mean_visual_loss(
+        target_fresh_r, views, args.final_render_size
+    )
+    base_quality = _gaussian_quality(base_fresh_g)
+    target_quality = _gaussian_quality(target_fresh_g)
 
     summary = {
         "scene": scene_dir.name,
@@ -544,6 +710,21 @@ def main() -> None:
         "training_resolution_baseline": {
             "aggregate": baseline_train_metrics,
             "views": baseline_train_views,
+            "visual_anchor_loss": baseline_visual_loss,
+        },
+        "visual_anchor": {
+            "fixed_base_loss": base_fixed_visual,
+            "fixed_optimized_loss": target_fixed_visual,
+            "fresh_base_loss": base_fresh_visual,
+            "fresh_optimized_loss": target_fresh_visual,
+        },
+        "fresh_quality": {
+            "base": base_quality,
+            "optimized": target_quality,
+            "density_mass_ratio": target_quality["effective_density_mass"]
+            / max(base_quality["effective_density_mass"], 1e-8),
+            "opacity_sum_ratio": target_quality["opacity_sum"]
+            / max(base_quality["opacity_sum"], 1e-8),
         },
         "fixed_anchors": {
             "base": base_fixed_m,
@@ -575,7 +756,7 @@ def main() -> None:
                 for name in views
             },
         },
-        "best_training_spatial_loss": best_loss,
+        "best_training_objective": best_loss,
         "peak_vram_gib": torch.cuda.max_memory_allocated(device) / 1024**3,
     }
     (scene_dir / "latent_optimization_summary.json").write_text(

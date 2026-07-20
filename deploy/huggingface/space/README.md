@@ -13,11 +13,12 @@ models:
 
 # Spatial Splat
 
-Private proof-of-concept interface for a paired five-way comparison:
+Private proof-of-concept interface for a paired six-way comparison:
 
 - Base TripoSplat
 - Spatial LoRA
 - Rank-2 Spatial LoRA compressed from the rank-8 adapter
+- Procedural six-view LoRA trained from exact primitive RGB and depth renders
 - Primitive geometry control
 - Spatial LoRA plus primitive geometry control
 
@@ -27,6 +28,12 @@ using `type`, `position`, `rotation`, and `scale`. Editor exports are uniformly
 normalized into the isometric frame used during adapter training. Every mode
 uses the same encoded image and exact Phase 2 noise. The 3D viewers draw the
 primitive wireframe over each Gaussian splat for direct spatial inspection.
+
+Geometry control defaults to the first 70% of flow steps, leaving the final
+30% to the normal Phase 2 model for detail cleanup. The `Control ends` slider
+sets this cutoff; `1.0` restores the original always-on behavior.
+The geometry-control strength slider intentionally extends to `15` for
+stress-testing; the trained default remains `1`.
 
 Six bundled templates can fill both inputs in one click. Three new realistic
 geometry tests cover a grassy Pine Clearing, a Cactus Desert, and a Wizard
@@ -51,6 +58,12 @@ with one quarter of the LoRA parameters. This tests whether the strongest
 learned directions carry spatial correction without the weaker appearance
 changes; it does not assume that individual latent coordinates have fixed
 transform meanings.
+
+The procedural six-view LoRA is an experimental rank-4 adapter trained on 12
+quality-gated primitive scenes. On one paired seed it improved 3 of 4 unseen
+procedural scenes, with median structure improvement of 4.5%, but mean
+structure loss was 6.0% worse because the held-out cluster regressed. It is
+included for visual stress-testing and is not a generalization claim.
 
 On one paired seed across two held-out scenes, Geometry Control improved mean
 six-view structure loss from `0.1051` to `0.0942` and mean worst-view P95 depth

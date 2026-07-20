@@ -42,6 +42,12 @@ def main() -> None:
     parser.add_argument("--optimization-steps", type=int, default=60)
     parser.add_argument("--render-size", type=int, default=256)
     parser.add_argument("--final-render-size", type=int, default=512)
+    parser.add_argument("--visual-weight", type=float, default=0.0)
+    parser.add_argument("--feature-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--opacity-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--scale-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--density-preservation-weight", type=float, default=0.0)
+    parser.add_argument("--minimum-density-ratio", type=float, default=0.95)
     parser.add_argument(
         "--views",
         nargs="+",
@@ -91,6 +97,18 @@ def main() -> None:
             str(args.render_size),
             "--final-render-size",
             str(args.final_render_size),
+            "--visual-weight",
+            str(args.visual_weight),
+            "--feature-preservation-weight",
+            str(args.feature_preservation_weight),
+            "--opacity-preservation-weight",
+            str(args.opacity_preservation_weight),
+            "--scale-preservation-weight",
+            str(args.scale_preservation_weight),
+            "--density-preservation-weight",
+            str(args.density_preservation_weight),
+            "--minimum-density-ratio",
+            str(args.minimum_density_ratio),
             "--views",
             *args.views,
         ]

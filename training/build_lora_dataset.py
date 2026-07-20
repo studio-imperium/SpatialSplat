@@ -32,6 +32,9 @@ def build_item(
     max_p95_depth_error: float,
     min_soft_iou: float,
     max_median_depth_error: float,
+    min_density_retention: float,
+    max_visual_regression: float,
+    use_structure_gate: bool,
 ) -> dict:
     candidate_path = scene_dir / "candidate_selection.json"
     candidate = (
@@ -93,7 +96,21 @@ def build_item(
         "soft_iou": worst_iou >= min_soft_iou,
         "candidate_orientation": candidate is None or candidate["selected_viable"],
     }
-    if target.get("object") is not None:
+    visual = summary.get("visual_anchor") or {}
+    quality = summary.get("fresh_quality") or {}
+    if visual.get("fresh_base_loss") is not None:
+        checks["visual_anchor_not_worse"] = (
+            float(visual["fresh_optimized_loss"])
+            <= (1.0 + max_visual_regression) * float(visual["fresh_base_loss"])
+        )
+    if quality:
+        checks["density_retained"] = (
+            float(quality["density_mass_ratio"]) >= min_density_retention
+        )
+        checks["opacity_retained"] = (
+            float(quality["opacity_sum_ratio"]) >= min_density_retention
+        )
+    if use_structure_gate and target.get("object") is not None:
         structure_checks = structure_gate(
             target,
             base,
@@ -129,6 +146,8 @@ def build_item(
             "relative_improvement": relative_improvement,
             "views": optimized_views,
             "structure": target if target.get("object") is not None else None,
+            "visual_anchor": visual or None,
+            "quality": quality or None,
         },
     }
 
@@ -142,6 +161,9 @@ def build_manifest(
     max_median_depth_error: float = 0.15,
     split_file: Path | None = None,
     split_names: tuple[str, ...] | list[str] = (),
+    min_density_retention: float = 0.9,
+    max_visual_regression: float = 0.02,
+    use_structure_gate: bool = True,
 ) -> dict:
     output = output.resolve()
     manifest_dir = output.parent
@@ -159,6 +181,9 @@ def build_manifest(
             max_p95_depth_error,
             min_soft_iou,
             max_median_depth_error,
+            min_density_retention,
+            max_visual_regression,
+            use_structure_gate,
         )
         for scene in scenes
     ]
@@ -170,6 +195,9 @@ def build_manifest(
         "max_p95_depth_error": max_p95_depth_error,
         "min_soft_iou": min_soft_iou,
         "max_median_depth_error": max_median_depth_error,
+        "min_density_retention": min_density_retention,
+        "max_visual_regression": max_visual_regression,
+        "use_structure_gate": use_structure_gate,
         "required_views": list(SUPERVISION_VIEWS),
         "splits": list(split_names),
         "num_items": len(items),
@@ -193,6 +221,9 @@ def main() -> None:
     parser.add_argument("--max-p95-depth-error", type=float, default=0.2)
     parser.add_argument("--min-soft-iou", type=float, default=0.65)
     parser.add_argument("--max-median-depth-error", type=float, default=0.15)
+    parser.add_argument("--min-density-retention", type=float, default=0.9)
+    parser.add_argument("--max-visual-regression", type=float, default=0.02)
+    parser.add_argument("--skip-structure-gate", action="store_true")
     parser.add_argument("--split-file", type=Path)
     parser.add_argument("--split", action="append", default=[])
     parser.add_argument("--allow-rejected", action="store_true")
@@ -207,6 +238,9 @@ def main() -> None:
         args.max_median_depth_error,
         args.split_file,
         args.split,
+        args.min_density_retention,
+        args.max_visual_regression,
+        not args.skip_structure_gate,
     )
     print(
         f"packaged {manifest['num_accepted']}/{manifest['num_items']} accepted targets"

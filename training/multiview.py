@@ -22,6 +22,7 @@ class SupervisionView:
     mask_path: Path
     boundary_path: Path
     ids_path: Path
+    rgb_path: Path
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class _ViewPaths:
     mask: Path
     boundary: Path
     ids: Path
+    rgb: Path
 
 
 def _camera_distance(camera: OrthographicCamera) -> float:
@@ -86,6 +88,11 @@ def _paths(scene_dir: Path, name: str) -> _ViewPaths:
         mask=scene_dir / f"{prefix}_mask.png",
         boundary=scene_dir / f"{prefix}_boundary.png",
         ids=scene_dir / f"{prefix}_ids.npy",
+        rgb=(
+            scene_dir / "primitive_control.png"
+            if name == "isometric"
+            else scene_dir / f"{prefix}_rgb.png"
+        ),
     )
 
 
@@ -110,6 +117,8 @@ def _save_target(scene_dir: Path, name: str, result) -> None:
     Image.fromarray(boundary, mode="L").save(
         scene_dir / f"{prefix}_boundary.png"
     )
+    rgba = np.concatenate([result.rgb, mask[..., None]], axis=-1)
+    Image.fromarray(rgba, mode="RGBA").save(scene_dir / f"{prefix}_rgb.png")
 
     preview = np.zeros(result.depth.shape, dtype=np.uint8)
     if np.any(result.mask):
@@ -144,6 +153,7 @@ def ensure_supervision_views(
             or not paths.mask.is_file()
             or not paths.boundary.is_file()
             or not paths.ids.is_file()
+            or not paths.rgb.is_file()
         ):
             render = render_scene(
                 PrimitiveScene(
@@ -156,7 +166,7 @@ def ensure_supervision_views(
             _save_target(scene_dir, name, render)
         missing = [
             path
-            for path in (paths.depth, paths.mask, paths.boundary, paths.ids)
+            for path in (paths.depth, paths.mask, paths.boundary, paths.ids, paths.rgb)
             if not path.is_file()
         ]
         if missing:
@@ -171,5 +181,6 @@ def ensure_supervision_views(
             mask_path=paths.mask,
             boundary_path=paths.boundary,
             ids_path=paths.ids,
+            rgb_path=paths.rgb,
         )
     return views

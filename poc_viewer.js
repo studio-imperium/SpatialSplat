@@ -20,7 +20,7 @@ const status = document.querySelector("#status");
 const errorBox = document.querySelector("#error");
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xf3f3f3);
+scene.background = new THREE.Color(0x1e1e1e);
 const overlayScene = new THREE.Scene();
 
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);

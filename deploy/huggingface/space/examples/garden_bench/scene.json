@@ -1,0 +1,126 @@
+{
+  "scene_id": "30_garden_bench",
+  "description": "A simple wooden garden bench with seat, back, and four legs.",
+  "camera": {
+    "position": [
+      1.7,
+      1.45,
+      1.7
+    ],
+    "target": [
+      0.0,
+      -0.08,
+      0.0
+    ],
+    "up": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "ortho_scale": 1.45,
+    "width": 512,
+    "height": 512
+  },
+  "primitives": [
+    {
+      "name": "ground",
+      "kind": "box",
+      "center": [
+        0.0,
+        -0.455,
+        0.0
+      ],
+      "size": [
+        0.98,
+        0.07,
+        0.98
+      ],
+      "color": [
+        82,
+        126,
+        72
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "seat",
+      "kind": "box",
+      "center": [
+        0.0,
+        -0.24,
+        0.0
+      ],
+      "size": [
+        0.68,
+        0.1,
+        0.26
+      ],
+      "color": [
+        143,
+        96,
+        57
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "back",
+      "kind": "box",
+      "center": [
+        0.0,
+        -0.03,
+        -0.11
+      ],
+      "size": [
+        0.68,
+        0.34,
+        0.08
+      ],
+      "color": [
+        143,
+        96,
+        57
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "leg_a",
+      "kind": "box",
+      "center": [
+        -0.25,
+        -0.34,
+        -0.07
+      ],
+      "size": [
+        0.09,
+        0.2,
+        0.09
+      ],
+      "color": [
+        105,
+        116,
+        126
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "leg_b",
+      "kind": "box",
+      "center": [
+        0.25,
+        -0.34,
+        -0.07
+      ],
+      "size": [
+        0.09,
+        0.2,
+        0.09
+      ],
+      "color": [
+        105,
+        116,
+        126
+      ],
+      "yaw_degrees": 0.0
+    }
+  ]
+}

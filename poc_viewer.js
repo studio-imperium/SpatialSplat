@@ -9,13 +9,19 @@ const POINT_LIMIT = 16000;
 const viewer = document.querySelector("#viewer");
 const sceneSelect = document.querySelector("#scene-select");
 const variantSelect = document.querySelector("#variant-select");
+const seedControl = document.querySelector("#seed-control");
+const seedSelect = document.querySelector("#seed-select");
 const splatMode = document.querySelector("#splat-mode");
+const splatModeControl = splatMode.closest("label");
 const representationLegend = document.querySelector("#representation-legend");
+const metricsTable = document.querySelector("#metrics");
+const inputImage = document.querySelector("#input-image");
 const status = document.querySelector("#status");
 const errorBox = document.querySelector("#error");
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf3f3f3);
+const overlayScene = new THREE.Scene();
 
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -39,7 +45,8 @@ scene.add(light);
 const solidGroup = new THREE.Group();
 const wireGroup = new THREE.Group();
 const splatGroup = new THREE.Group();
-scene.add(solidGroup, wireGroup, splatGroup);
+scene.add(solidGroup, splatGroup);
+overlayScene.add(wireGroup);
 
 const solidMaterial = new THREE.MeshStandardMaterial({
   color: 0x999999,
@@ -68,6 +75,41 @@ let currentCameraData = null;
 let actualSplat = null;
 let actualSplatRoot = null;
 let loadVersion = 0;
+let freshSceneNames = new Set();
+let baselineSceneNames = new Set();
+let pairSceneNames = new Set();
+let sceneRoots = new Map();
+let freshResultRoots = new Map();
+
+function isFreshVariant() {
+  return variantSelect.value === "fresh_base" || variantSelect.value === "fresh_lora";
+}
+
+function isInputVariant() {
+  return variantSelect.value === "input_pair";
+}
+
+function updateResultControls() {
+  const sceneName = sceneSelect.value;
+  const support = {
+    baseline: baselineSceneNames.has(sceneName),
+    optimized: baselineSceneNames.has(sceneName),
+    input_pair: pairSceneNames.has(sceneName),
+    fresh_base: freshSceneNames.has(sceneName),
+    fresh_lora: freshSceneNames.has(sceneName),
+  };
+  for (const option of variantSelect.options) {
+    option.disabled = !support[option.value];
+  }
+  if (variantSelect.selectedOptions[0]?.disabled) {
+    variantSelect.value = support.input_pair
+      ? "input_pair"
+      : [...variantSelect.options].find(option => !option.disabled)?.value || "";
+  }
+  const fresh = isFreshVariant();
+  seedControl.hidden = !fresh;
+  updateRepresentation();
+}
 
 function prettyName(value) {
   return value
@@ -141,13 +183,17 @@ function buildActualSplat(url) {
 }
 
 function updateRepresentation() {
+  const inputPair = isInputVariant();
   const showSplats = splatMode.checked;
-  splatGroup.visible = !showSplats;
-  solidGroup.visible = !showSplats;
-  if (actualSplatRoot) actualSplatRoot.visible = showSplats;
-  representationLegend.innerHTML = showSplats
-    ? "actual splat"
-    : '<span class="swatch cyan"></span> points';
+  splatModeControl.hidden = inputPair;
+  splatGroup.visible = !inputPair && !showSplats;
+  solidGroup.visible = inputPair || !showSplats;
+  if (actualSplatRoot) actualSplatRoot.visible = !inputPair && showSplats;
+  representationLegend.innerHTML = inputPair
+    ? "generated image + primitives"
+    : showSplats
+      ? "actual splat"
+      : '<span class="swatch cyan"></span> points';
 }
 
 function findPlyDataOffset(bytes) {
@@ -255,6 +301,8 @@ function resetCamera() {
 }
 
 function updateMetrics(metrics) {
+  metricsTable.hidden = !metrics;
+  if (!metrics) return;
   document.querySelector("#spatial-score").textContent = metrics.spatial_score.toFixed(4);
   document.querySelector("#depth-loss").textContent = metrics.depth_loss.toFixed(4);
   document.querySelector("#mask-iou").textContent = metrics.soft_iou.toFixed(4);
@@ -267,14 +315,30 @@ async function loadScene(sceneName) {
   status.hidden = false;
   errorBox.hidden = true;
   try {
-    const root = `poc_data/${sceneName}`;
-    const [sceneData, baselineMetrics, optimizationResponse] = await Promise.all([
-      fetch(`${root}/scene.json`).then(response => response.json()),
-      fetch(`${root}/base_metrics.json`).then(response => response.json()),
-      fetch(`${root}/latent_optimization_summary.json`),
-    ]);
+    const root = sceneRoots.get(sceneName) || `poc_data/${sceneName}`;
+    const sceneResponse = await fetch(`${root}/scene.json`);
+    if (!sceneResponse.ok) throw new Error(`Failed to load scene: ${sceneResponse.status}`);
+    const sceneData = await sceneResponse.json();
     if (version !== loadVersion) return;
 
+    currentCameraData = sceneData.camera;
+    buildPrimitives(sceneData.primitives);
+
+    if (isInputVariant()) {
+      clearActualSplat();
+      clearGroup(splatGroup);
+      updateMetrics(null);
+      inputImage.src = `${root}/generated_image.png`;
+      inputImage.hidden = false;
+      resetCamera();
+      updateRepresentation();
+      status.hidden = true;
+      return;
+    }
+
+    inputImage.hidden = true;
+    inputImage.removeAttribute("src");
+    const optimizationResponse = await fetch(`${root}/latent_optimization_summary.json`);
     const optimizedOption = variantSelect.querySelector('option[value="optimized"]');
     optimizedOption.disabled = !optimizationResponse.ok;
     if (!optimizationResponse.ok && variantSelect.value === "optimized") {
@@ -283,17 +347,33 @@ async function loadScene(sceneName) {
     const optimization = optimizationResponse.ok
       ? await optimizationResponse.json()
       : null;
-    const optimized = variantSelect.value === "optimized" && optimization;
-    const metrics = optimized
-      ? optimization.fresh_anchors.optimized
-      : baselineMetrics;
-    const splatName = optimized ? "optimized_splat.ply" : "base_splat.ply";
+    let metrics;
+    let splatUrl;
 
-    currentCameraData = sceneData.camera;
-    buildPrimitives(sceneData.primitives);
+    if (isFreshVariant()) {
+      if (!freshSceneNames.has(sceneName)) {
+        throw new Error("No fresh-generation test exists for this scene");
+      }
+      const seed = seedSelect.value.padStart(4, "0");
+      const freshRoot = `${freshResultRoots.get(sceneName)}/${sceneName}/seed_${seed}`;
+      const freshMetrics = await fetch(`${freshRoot}/metrics.json`).then(response => {
+        if (!response.ok) throw new Error(`Failed to load fresh metrics: ${response.status}`);
+        return response.json();
+      });
+      const resultName = variantSelect.value === "fresh_lora" ? "lora" : "base";
+      metrics = freshMetrics[resultName].aggregate;
+      splatUrl = `${freshRoot}/${resultName}_splat.ply`;
+    } else {
+      const optimized = variantSelect.value === "optimized" && optimization;
+      metrics = optimized
+        ? optimization.fresh_anchors.optimized
+        : await fetch(`${root}/base_metrics.json`).then(response => response.json());
+      splatUrl = `${root}/${optimized ? "optimized_splat.ply" : "base_splat.ply"}`;
+    }
+
     updateMetrics(metrics);
     resetCamera();
-    await loadSplat(`${root}/${splatName}`, version);
+    await loadSplat(splatUrl, version);
     if (version === loadVersion) status.hidden = true;
   } catch (error) {
     console.error(error);
@@ -305,16 +385,99 @@ async function loadScene(sceneName) {
 
 async function initialize() {
   try {
-    const response = await fetch("poc_data/baseline_summary.json");
-    if (!response.ok) throw new Error("Failed to load baseline summary");
-    const summary = await response.json();
+    const [
+      baselineResponse,
+      freshResponse,
+      heldoutResponse,
+      diverseTestResponse,
+      diverseSplitResponse,
+    ] = await Promise.all([
+      fetch("poc_data/baseline_summary.json"),
+      fetch("poc_data/fresh_generation_six_view/summary.json"),
+      fetch("poc_data/heldout_alpha_generation_six_view/summary.json"),
+      fetch("poc_data/diverse_test_final/summary.json"),
+      fetch("poc_data/diverse_train/split.json"),
+    ]);
+    if (!baselineResponse.ok) throw new Error("Failed to load baseline summary");
+    const summary = await baselineResponse.json();
+    baselineSceneNames = new Set(summary.scenes.map(result => result.scene));
+    for (const sceneName of baselineSceneNames) pairSceneNames.add(sceneName);
+    if (freshResponse.ok) {
+      const freshSummary = await freshResponse.json();
+      for (const pair of freshSummary.pairs) {
+        freshSceneNames.add(pair.scene);
+        freshResultRoots.set(pair.scene, "poc_data/fresh_generation_six_view");
+      }
+    }
 
+    const originalGroup = document.createElement("optgroup");
+    originalGroup.label = "Original POC scenes";
     for (const result of summary.scenes) {
       const option = document.createElement("option");
       option.value = result.scene;
       option.textContent = prettyName(result.scene);
-      sceneSelect.appendChild(option);
+      originalGroup.appendChild(option);
+      sceneRoots.set(result.scene, `poc_data/${result.scene}`);
     }
+    sceneSelect.appendChild(originalGroup);
+
+    if (diverseSplitResponse.ok) {
+      const split = await diverseSplitResponse.json();
+      const addPairGroup = (label, sceneNames) => {
+        const group = document.createElement("optgroup");
+        group.label = label;
+        for (const sceneName of sceneNames) {
+          const option = document.createElement("option");
+          option.value = sceneName;
+          option.textContent = prettyName(sceneName);
+          group.appendChild(option);
+          pairSceneNames.add(sceneName);
+          sceneRoots.set(sceneName, `poc_data/diverse_train/${sceneName}`);
+        }
+        sceneSelect.appendChild(group);
+      };
+      addPairGroup("Training scenes", split.splits.train);
+      addPairGroup("Validation scenes", split.splits.validation);
+    }
+
+    if (heldoutResponse.ok) {
+      const heldoutSummary = await heldoutResponse.json();
+      const heldoutScenes = [...new Set(heldoutSummary.pairs.map(pair => pair.scene))];
+      const heldoutGroup = document.createElement("optgroup");
+      heldoutGroup.label = "Held-out scenes";
+      for (const sceneName of heldoutScenes) {
+        const option = document.createElement("option");
+        option.value = sceneName;
+        option.textContent = prettyName(sceneName);
+        heldoutGroup.appendChild(option);
+        pairSceneNames.add(sceneName);
+        freshSceneNames.add(sceneName);
+        sceneRoots.set(sceneName, `poc_data/heldout_alpha/${sceneName}`);
+        freshResultRoots.set(
+          sceneName, "poc_data/heldout_alpha_generation_six_view"
+        );
+      }
+      sceneSelect.appendChild(heldoutGroup);
+    }
+
+    if (diverseTestResponse.ok) {
+      const diverseTestSummary = await diverseTestResponse.json();
+      const testScenes = [...new Set(diverseTestSummary.pairs.map(pair => pair.scene))];
+      const testGroup = document.createElement("optgroup");
+      testGroup.label = "Final untouched test";
+      for (const sceneName of testScenes) {
+        const option = document.createElement("option");
+        option.value = sceneName;
+        option.textContent = prettyName(sceneName);
+        testGroup.appendChild(option);
+        pairSceneNames.add(sceneName);
+        freshSceneNames.add(sceneName);
+        sceneRoots.set(sceneName, `poc_data/diverse_train/${sceneName}`);
+        freshResultRoots.set(sceneName, "poc_data/diverse_test_final");
+      }
+      sceneSelect.appendChild(testGroup);
+    }
+    updateResultControls();
     await loadScene(summary.scenes[0].scene);
   } catch (error) {
     console.error(error);
@@ -324,15 +487,26 @@ async function initialize() {
   }
 }
 
-sceneSelect.addEventListener("change", () => loadScene(sceneSelect.value));
-variantSelect.addEventListener("change", () => loadScene(sceneSelect.value));
+sceneSelect.addEventListener("change", () => {
+  updateResultControls();
+  loadScene(sceneSelect.value);
+});
+variantSelect.addEventListener("change", () => {
+  updateResultControls();
+  loadScene(sceneSelect.value);
+});
+seedSelect.addEventListener("change", () => loadScene(sceneSelect.value));
 splatMode.addEventListener("change", updateRepresentation);
 document.querySelector("#reset-camera").addEventListener("click", resetCamera);
 new ResizeObserver(updateProjection).observe(viewer);
 
 renderer.setAnimationLoop(() => {
   controls.update();
+  renderer.autoClear = false;
+  renderer.clear();
   renderer.render(scene, camera);
+  renderer.clearDepth();
+  renderer.render(overlayScene, camera);
 });
 
 resetCamera();

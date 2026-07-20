@@ -134,3 +134,77 @@ def load_lora(model: nn.Module, path: Path) -> None:
             raise KeyError(f"LoRA module not found: {module_name}")
         parameter = getattr(module, parameter_name)
         parameter.data.copy_(value.to(device=parameter.device, dtype=parameter.dtype))
+
+
+def set_lora_enabled(model: nn.Module, enabled: bool) -> None:
+    for module in model.modules():
+        if isinstance(module, LoRALinear):
+            module.scaling = module.alpha / module.rank if enabled else 0.0
+
+
+def compress_lora_state(
+    state: dict[str, torch.Tensor], target_rank: int
+) -> tuple[dict[str, torch.Tensor], dict[str, float | int]]:
+    """Return the best per-layer rank-k approximation of a LoRA state."""
+    if target_rank <= 0:
+        raise ValueError("target_rank must be positive")
+
+    module_names = sorted(
+        key[: -len(".lora_a")]
+        for key in state
+        if key.endswith(".lora_a")
+    )
+    if not module_names:
+        raise ValueError("state does not contain LoRA weights")
+
+    compressed: dict[str, torch.Tensor] = {}
+    retained_energy = 0.0
+    total_energy = 0.0
+    source_rank = None
+    for module_name in module_names:
+        key_a = f"{module_name}.lora_a"
+        key_b = f"{module_name}.lora_b"
+        if key_b not in state:
+            raise KeyError(f"missing paired LoRA weight: {key_b}")
+        lora_a = state[key_a].float()
+        lora_b = state[key_b].float()
+        if lora_a.ndim != 2 or lora_b.ndim != 2:
+            raise ValueError(f"LoRA weights must be matrices: {module_name}")
+        if lora_a.shape[0] != lora_b.shape[1]:
+            raise ValueError(f"LoRA rank mismatch: {module_name}")
+        if source_rank is None:
+            source_rank = int(lora_a.shape[0])
+        elif source_rank != int(lora_a.shape[0]):
+            raise ValueError("all LoRA layers must use the same source rank")
+        if target_rank > source_rank:
+            raise ValueError(
+                f"target_rank {target_rank} exceeds source rank {source_rank}"
+            )
+
+        # B @ A has rank at most the source LoRA rank. Reduce its SVD to a
+        # tiny source_rank x source_rank matrix rather than materializing the
+        # full dense layer update.
+        q_b, r_b = torch.linalg.qr(lora_b, mode="reduced")
+        q_a, r_a = torch.linalg.qr(lora_a.T, mode="reduced")
+        u_small, singular_values, vh_small = torch.linalg.svd(
+            r_b @ r_a.T, full_matrices=False
+        )
+        singular_values = singular_values[:target_rank]
+        roots = singular_values.sqrt()
+        new_b = (q_b @ u_small[:, :target_rank]) * roots.unsqueeze(0)
+        new_a = roots.unsqueeze(1) * (vh_small[:target_rank] @ q_a.T)
+
+        compressed[key_a] = new_a.to(state[key_a].dtype).contiguous()
+        compressed[key_b] = new_b.to(state[key_b].dtype).contiguous()
+        all_energy = torch.linalg.svdvals(r_b @ r_a.T).square()
+        total_energy += float(all_energy.sum())
+        retained_energy += float(all_energy[:target_rank].sum())
+
+    assert source_rank is not None
+    return compressed, {
+        "source_rank": source_rank,
+        "target_rank": target_rank,
+        "retained_update_energy": retained_energy / max(total_energy, 1e-12),
+        "source_parameters": sum(tensor.numel() for tensor in state.values()),
+        "target_parameters": sum(tensor.numel() for tensor in compressed.values()),
+    }

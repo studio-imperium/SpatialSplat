@@ -54,6 +54,7 @@ def spatial_loss_torch(
     predicted_depth: "torch.Tensor",
     predicted_alpha: "torch.Tensor",
     config: SpatialLossConfig = SpatialLossConfig(),
+    depth_range_override: "torch.Tensor | float | None" = None,
 ) -> dict[str, "torch.Tensor"]:
     """Differentiable counterpart to `spatial_metrics` for Phase 3 training."""
     import torch
@@ -80,7 +81,17 @@ def spatial_loss_torch(
     foreground_depth = torch.where(target_mask > 0.5, target_depth, torch.nan)
     depth_min = torch.nan_to_num(foreground_depth, nan=torch.inf).amin(dim=(1, 2))
     depth_max = torch.nan_to_num(foreground_depth, nan=-torch.inf).amax(dim=(1, 2))
-    depth_range = (depth_max - depth_min).clamp_min(1e-4)
+    if depth_range_override is None:
+        depth_range = (depth_max - depth_min).clamp_min(1e-4)
+    else:
+        depth_range = torch.as_tensor(
+            depth_range_override, device=target_depth.device, dtype=target_depth.dtype
+        ).flatten()
+        if depth_range.numel() == 1:
+            depth_range = depth_range.expand(target_depth.shape[0])
+        if depth_range.numel() != target_depth.shape[0]:
+            raise ValueError("depth range override must be scalar or one value per batch item")
+        depth_range = depth_range.clamp_min(1e-4)
     normalized_error = (
         (predicted_coarse_depth - target_coarse_depth).abs()
         / depth_range[:, None, None]

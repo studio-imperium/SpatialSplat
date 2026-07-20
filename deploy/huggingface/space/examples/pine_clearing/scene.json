@@ -1,0 +1,94 @@
+{
+  "scene_id": "60_pine_clearing",
+  "description": "A grassy plot with three pine trees of different heights.",
+  "camera": {
+    "position": [1.7, 1.45, 1.7],
+    "target": [0.0, -0.08, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "ortho_scale": 1.45,
+    "width": 512,
+    "height": 512
+  },
+  "primitives": [
+    {
+      "name": "ground",
+      "kind": "box",
+      "center": [0.0, -0.455, 0.0],
+      "size": [1.08, 0.07, 1.0],
+      "color": [91, 139, 66],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "rear_pine_trunk",
+      "kind": "cylinder",
+      "center": [-0.25, -0.22, -0.19],
+      "size": [0.09, 0.4, 0.09],
+      "color": [104, 68, 40],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "rear_pine_lower_crown",
+      "kind": "sphere",
+      "center": [-0.25, 0.01, -0.19],
+      "size": [0.3, 0.3, 0.3],
+      "color": [38, 104, 60],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "rear_pine_upper_crown",
+      "kind": "sphere",
+      "center": [-0.25, 0.2, -0.19],
+      "size": [0.23, 0.23, 0.23],
+      "color": [46, 119, 67],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "right_pine_trunk",
+      "kind": "cylinder",
+      "center": [0.25, -0.26, -0.04],
+      "size": [0.075, 0.32, 0.075],
+      "color": [108, 70, 42],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "right_pine_lower_crown",
+      "kind": "sphere",
+      "center": [0.25, -0.04, -0.04],
+      "size": [0.25, 0.25, 0.25],
+      "color": [35, 97, 56],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "right_pine_upper_crown",
+      "kind": "sphere",
+      "center": [0.25, 0.12, -0.04],
+      "size": [0.19, 0.19, 0.19],
+      "color": [45, 116, 65],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "front_pine_trunk",
+      "kind": "cylinder",
+      "center": [-0.01, -0.285, 0.28],
+      "size": [0.07, 0.27, 0.07],
+      "color": [111, 72, 44],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "front_pine_lower_crown",
+      "kind": "sphere",
+      "center": [-0.01, -0.09, 0.28],
+      "size": [0.22, 0.22, 0.22],
+      "color": [37, 102, 59],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "front_pine_upper_crown",
+      "kind": "sphere",
+      "center": [-0.01, 0.05, 0.28],
+      "size": [0.16, 0.16, 0.16],
+      "color": [48, 121, 68],
+      "yaw_degrees": 0.0
+    }
+  ]
+}

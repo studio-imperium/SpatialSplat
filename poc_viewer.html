@@ -33,6 +33,18 @@
     #status, #error { left: 50%; top: 50%; transform: translate(-50%, -50%); }
     #error { color: red; }
 
+    #input-image {
+      position: fixed;
+      right: 8px;
+      bottom: 8px;
+      z-index: 1;
+      max-width: 40vw;
+      max-height: 45vh;
+      border: 1px solid;
+      background: white;
+      object-fit: contain;
+    }
+
     .swatch {
       display: inline-block;
       width: 10px;
@@ -50,6 +62,11 @@
         top: 76px;
         left: 8px;
         right: auto;
+      }
+
+      #input-image {
+        max-width: 50vw;
+        max-height: 35vh;
       }
     }
   </style>
@@ -73,7 +90,18 @@
     <select id="variant-select">
       <option value="baseline">Baseline</option>
       <option value="optimized">Optimized latent</option>
+      <option value="input_pair">Input pair</option>
+      <option value="fresh_base">Fresh base</option>
+      <option value="fresh_lora">Fresh LoRA</option>
     </select>
+    <span id="seed-control" hidden>
+      <label for="seed-select">Seed</label>
+      <select id="seed-select">
+        <option value="101">101</option>
+        <option value="202">202</option>
+        <option value="303">303</option>
+      </select>
+    </span>
     <label for="splat-mode">
       <input id="splat-mode" type="checkbox" checked>
       Actual splats
@@ -97,9 +125,11 @@
     <span id="representation-legend"><span class="swatch cyan"></span> points</span>
   </div>
 
+  <img id="input-image" alt="Generated training image" hidden>
+
   <div id="status">Loading...</div>
   <div id="error" hidden></div>
 
-  <script type="module" src="poc_viewer.js"></script>
+  <script type="module" src="poc_viewer.js?v=2"></script>
 </body>
 </html>

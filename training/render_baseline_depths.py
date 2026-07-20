@@ -37,14 +37,18 @@ def _boundary(mask: np.ndarray) -> np.ndarray:
     return result
 
 
-def _alignment_overlay(scene_dir: Path, alpha: np.ndarray) -> Image.Image:
+def _alignment_overlay(
+    scene_dir: Path,
+    alpha: np.ndarray,
+    boundary_path: Path | None = None,
+) -> Image.Image:
     background = np.repeat(
         np.clip(np.round(alpha * 120), 0, 120).astype(np.uint8)[..., None],
         3,
         axis=2,
     )
     target_boundary_image = Image.open(
-        scene_dir / "primitive_boundary.png"
+        boundary_path or scene_dir / "primitive_boundary.png"
     ).convert("L")
     if target_boundary_image.size != (alpha.shape[1], alpha.shape[0]):
         target_boundary_image = target_boundary_image.resize(

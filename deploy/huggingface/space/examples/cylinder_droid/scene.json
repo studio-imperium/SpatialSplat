@@ -1,0 +1,106 @@
+{
+  "scene_id": "40_cylinder_droid",
+  "description": "A standalone cylindrical service droid with round head and two block feet.",
+  "camera": {
+    "position": [
+      1.7,
+      1.45,
+      1.7
+    ],
+    "target": [
+      0.0,
+      -0.08,
+      0.0
+    ],
+    "up": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "ortho_scale": 1.45,
+    "width": 512,
+    "height": 512
+  },
+  "primitives": [
+    {
+      "name": "body",
+      "kind": "cylinder",
+      "center": [
+        0.0,
+        -0.18,
+        0.0
+      ],
+      "size": [
+        0.3,
+        0.48,
+        0.3
+      ],
+      "color": [
+        105,
+        116,
+        126
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "head",
+      "kind": "sphere",
+      "center": [
+        0.0,
+        0.1,
+        0.0
+      ],
+      "size": [
+        0.26,
+        0.26,
+        0.26
+      ],
+      "color": [
+        220,
+        174,
+        55
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "left_foot",
+      "kind": "box",
+      "center": [
+        -0.11,
+        -0.38,
+        0.05
+      ],
+      "size": [
+        0.18,
+        0.1,
+        0.24
+      ],
+      "color": [
+        151,
+        76,
+        52
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "right_foot",
+      "kind": "box",
+      "center": [
+        0.11,
+        -0.38,
+        0.05
+      ],
+      "size": [
+        0.18,
+        0.1,
+        0.24
+      ],
+      "color": [
+        151,
+        76,
+        52
+      ],
+      "yaw_degrees": 0.0
+    }
+  ]
+}

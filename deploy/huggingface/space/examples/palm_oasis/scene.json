@@ -1,0 +1,126 @@
+{
+  "scene_id": "10_palm_oasis",
+  "description": "A single palm tree beside a small square oasis pool in sand.",
+  "camera": {
+    "position": [
+      1.7,
+      1.45,
+      1.7
+    ],
+    "target": [
+      0.0,
+      -0.08,
+      0.0
+    ],
+    "up": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "ortho_scale": 1.45,
+    "width": 512,
+    "height": 512
+  },
+  "primitives": [
+    {
+      "name": "ground",
+      "kind": "box",
+      "center": [
+        0.0,
+        -0.455,
+        0.0
+      ],
+      "size": [
+        0.98,
+        0.07,
+        0.98
+      ],
+      "color": [
+        202,
+        166,
+        101
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "trunk",
+      "kind": "cylinder",
+      "center": [
+        -0.18,
+        -0.2,
+        -0.05
+      ],
+      "size": [
+        0.11,
+        0.44,
+        0.11
+      ],
+      "color": [
+        112,
+        72,
+        42
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "crown_a",
+      "kind": "sphere",
+      "center": [
+        -0.25,
+        0.08,
+        -0.05
+      ],
+      "size": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "color": [
+        56,
+        132,
+        70
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "crown_b",
+      "kind": "sphere",
+      "center": [
+        -0.08,
+        0.08,
+        -0.05
+      ],
+      "size": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "color": [
+        56,
+        132,
+        70
+      ],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "pool",
+      "kind": "box",
+      "center": [
+        0.24,
+        -0.39,
+        0.16
+      ],
+      "size": [
+        0.32,
+        0.06,
+        0.28
+      ],
+      "color": [
+        58,
+        137,
+        174
+      ],
+      "yaw_degrees": 0.0
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "scene_id": "62_wizard_tower_shrubs",
+  "description": "A wizard's stone tower on rocky terrain, surrounded by shrubs and boulders.",
+  "camera": {
+    "position": [1.7, 1.45, 1.7],
+    "target": [0.0, -0.08, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "ortho_scale": 1.55,
+    "width": 512,
+    "height": 512
+  },
+  "primitives": [
+    {
+      "name": "ground",
+      "kind": "box",
+      "center": [0.0, -0.455, 0.0],
+      "size": [1.12, 0.07, 1.04],
+      "color": [113, 115, 105],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "tower_body",
+      "kind": "cylinder",
+      "center": [-0.08, -0.13, -0.05],
+      "size": [0.38, 0.58, 0.38],
+      "color": [121, 117, 108],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "tower_cornice",
+      "kind": "cylinder",
+      "center": [-0.08, 0.18, -0.05],
+      "size": [0.45, 0.1, 0.45],
+      "color": [101, 98, 93],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "roof_lower",
+      "kind": "cylinder",
+      "center": [-0.08, 0.28, -0.05],
+      "size": [0.4, 0.12, 0.4],
+      "color": [74, 70, 91],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "roof_middle",
+      "kind": "cylinder",
+      "center": [-0.08, 0.39, -0.05],
+      "size": [0.29, 0.1, 0.29],
+      "color": [68, 63, 84],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "roof_upper",
+      "kind": "cylinder",
+      "center": [-0.08, 0.48, -0.05],
+      "size": [0.18, 0.08, 0.18],
+      "color": [62, 57, 77],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "spire",
+      "kind": "cylinder",
+      "center": [-0.08, 0.58, -0.05],
+      "size": [0.045, 0.14, 0.045],
+      "color": [113, 88, 54],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "side_turret_body",
+      "kind": "cylinder",
+      "center": [0.21, -0.24, 0.05],
+      "size": [0.2, 0.36, 0.2],
+      "color": [112, 108, 100],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "side_turret_roof",
+      "kind": "cylinder",
+      "center": [0.21, -0.015, 0.05],
+      "size": [0.24, 0.11, 0.24],
+      "color": [73, 67, 88],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "door",
+      "kind": "box",
+      "center": [0.02, -0.27, 0.145],
+      "size": [0.12, 0.25, 0.055],
+      "color": [85, 55, 35],
+      "yaw_degrees": -3.0
+    },
+    {
+      "name": "shrub_left",
+      "kind": "sphere",
+      "center": [-0.39, -0.35, 0.18],
+      "size": [0.17, 0.17, 0.17],
+      "color": [67, 103, 58],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "shrub_front",
+      "kind": "sphere",
+      "center": [0.08, -0.37, 0.37],
+      "size": [0.13, 0.13, 0.13],
+      "color": [76, 112, 63],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "shrub_right",
+      "kind": "sphere",
+      "center": [0.39, -0.36, 0.2],
+      "size": [0.15, 0.15, 0.15],
+      "color": [62, 98, 55],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "boulder_left",
+      "kind": "sphere",
+      "center": [-0.4, -0.37, -0.21],
+      "size": [0.14, 0.14, 0.14],
+      "color": [92, 94, 91],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "boulder_right",
+      "kind": "sphere",
+      "center": [0.37, -0.38, -0.22],
+      "size": [0.12, 0.12, 0.12],
+      "color": [104, 105, 99],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "boulder_front",
+      "kind": "sphere",
+      "center": [-0.22, -0.4, 0.38],
+      "size": [0.09, 0.09, 0.09],
+      "color": [99, 101, 97],
+      "yaw_degrees": 0.0
+    }
+  ]
+}

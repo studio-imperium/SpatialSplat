@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "base_checkpoint": "diffusion_models/triposplat_fp16.safetensors",
+  "control_type": "primitive_sdf_vecseq",
+  "feature_names": [
+    "signed_distance",
+    "surface_band_narrow",
+    "surface_band_wide",
+    "occupancy",
+    "normal_x",
+    "normal_y",
+    "normal_z",
+    "kind_box",
+    "kind_sphere",
+    "kind_cylinder",
+    "is_support",
+    "valid"
+  ],
+  "hidden_channels": 64,
+  "layer_indices": [
+    3,
+    7,
+    11,
+    15,
+    19,
+    23
+  ],
+  "trainable_parameters": 1209600,
+  "sobol_seed": 123,
+  "default_control_scale": 1.0,
+  "lora_training_probability": 0.5
+}

@@ -20,10 +20,16 @@ from training.decode_train import (
     sample_fixed_anchors,
 )
 from training.gsplat_depth_renderer import render_decoder_gaussian
+from training.multiview import SUPERVISION_VIEWS, ensure_supervision_views
 from training.render_baseline_depths import _alignment_overlay, _depth_preview
-from training.scene_schema import OrthographicCamera
-from training.spatial_loss import SpatialLossConfig, spatial_metrics
-from training.spatial_loss_torch import spatial_loss_torch
+from training.spatial_loss import SpatialLossConfig
+from training.structure_loss_torch import structure_loss_torch
+from training.structure_metrics import (
+    aggregate_structure_metrics,
+    region_masks,
+    structure_view_metrics,
+    support_primitive_ids,
+)
 
 
 def _checkpoint(root: Path, relative: str) -> str:
@@ -137,14 +143,18 @@ def _numpy_metrics(
     target_mask: torch.Tensor,
     predicted_depth: torch.Tensor,
     predicted_alpha: torch.Tensor,
+    primitive_ids: np.ndarray,
+    support_ids: set[int],
     config: SpatialLossConfig,
-) -> dict[str, float]:
-    return spatial_metrics(
+) -> dict:
+    return structure_view_metrics(
         target_depth.detach().cpu().numpy(),
         target_mask.detach().cpu().numpy(),
+        primitive_ids,
         predicted_depth.detach().cpu().numpy(),
         predicted_alpha.detach().cpu().numpy(),
-        config,
+        support_ids,
+        spatial_config=config,
     )
 
 
@@ -152,20 +162,32 @@ def _render_metrics(
     decoder,
     latent: torch.Tensor,
     anchors: dict[str, torch.Tensor],
-    camera: OrthographicCamera,
-    target_depth: torch.Tensor,
-    target_mask: torch.Tensor,
+    views: dict[str, dict],
     size: int,
     config: SpatialLossConfig,
 ):
     with torch.no_grad():
         gaussian = decode_fixed_anchors(decoder, latent, anchors)
-        rendered = render_decoder_gaussian(gaussian, camera, size, size)
-        resized_depth, resized_mask = _resize_target(target_depth, target_mask, size)
-        metrics = _numpy_metrics(
-            resized_depth, resized_mask, rendered.depth, rendered.alpha, config
-        )
-    return gaussian, rendered, metrics
+        renders = {}
+        metrics = {}
+        for name, view in views.items():
+            rendered = render_decoder_gaussian(
+                gaussian, view["camera"], size, size
+            )
+            resized_depth, resized_mask = _resize_target(
+                view["depth"], view["mask"], size
+            )
+            renders[name] = rendered
+            metrics[name] = _numpy_metrics(
+                resized_depth,
+                resized_mask,
+                rendered.depth,
+                rendered.alpha,
+                view["primitive_ids"],
+                view["support_ids"],
+                config,
+            )
+    return gaussian, renders, aggregate_structure_metrics(metrics), metrics
 
 
 def _write_render_artifacts(
@@ -173,6 +195,7 @@ def _write_render_artifacts(
     prefix: str,
     depth: torch.Tensor,
     alpha: torch.Tensor,
+    boundary_path: Path,
 ) -> None:
     depth_np = depth.detach().cpu().numpy().astype(np.float32)
     alpha_np = alpha.detach().cpu().numpy().astype(np.float32)
@@ -184,7 +207,7 @@ def _write_render_artifacts(
     _depth_preview(depth_np, alpha_np).save(
         scene_dir / f"{prefix}_depth_preview.png"
     )
-    _alignment_overlay(scene_dir, alpha_np).save(
+    _alignment_overlay(scene_dir, alpha_np, boundary_path).save(
         scene_dir / f"{prefix}_alignment_overlay.png"
     )
 
@@ -196,7 +219,7 @@ def _improvement(before: dict[str, float], after: dict[str, float]) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Optimize one TripoSplat latent against isometric primitive depth."
+        description="Optimize one TripoSplat latent against multi-view primitive depth."
     )
     parser.add_argument(
         "--scene-dir", type=Path, default=Path("poc_data/01_center_cube")
@@ -217,6 +240,13 @@ def main() -> None:
     parser.add_argument("--render-size", type=int, default=256)
     parser.add_argument("--final-render-size", type=int, default=512)
     parser.add_argument("--log-every", type=int, default=5)
+    parser.add_argument("--print-summary-json", action="store_true")
+    parser.add_argument(
+        "--views",
+        nargs="+",
+        choices=SUPERVISION_VIEWS,
+        default=list(SUPERVISION_VIEWS),
+    )
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -224,17 +254,24 @@ def main() -> None:
     device = torch.device(args.device)
     scene_dir = args.scene_dir.resolve()
     checkpoint_root = args.checkpoint_root.resolve()
-    scene_data = json.loads((scene_dir / "scene.json").read_text(encoding="utf-8"))
-    camera = OrthographicCamera(**scene_data["camera"])
     config = SpatialLossConfig()
-
-    target_depth = torch.from_numpy(
-        np.load(scene_dir / "primitive_depth.npy")
-    ).to(device=device, dtype=torch.float32)
-    target_mask = torch.from_numpy(
-        np.asarray(Image.open(scene_dir / "primitive_mask.png").convert("L"))
-        / 255.0
-    ).to(device=device, dtype=torch.float32)
+    view_specs = ensure_supervision_views(scene_dir, args.views)
+    support_ids = support_primitive_ids(scene_dir)
+    views = {
+        name: {
+            "camera": spec.camera,
+            "depth": torch.from_numpy(np.load(spec.depth_path)).to(
+                device=device, dtype=torch.float32
+            ),
+            "mask": torch.from_numpy(
+                np.asarray(Image.open(spec.mask_path).convert("L")).copy() / 255.0
+            ).to(device=device, dtype=torch.float32),
+            "boundary_path": spec.boundary_path,
+            "primitive_ids": np.load(spec.ids_path),
+            "support_ids": support_ids,
+        }
+        for name, spec in view_specs.items()
+    }
 
     started = time.time()
     sample = _load_or_generate_base_sample(
@@ -263,28 +300,40 @@ def main() -> None:
     freeze_decoder(decoder)
     latent = torch.nn.Parameter(base_latent.clone())
     optimizer = torch.optim.Adam([latent], lr=args.learning_rate)
-    target_depth_train, target_mask_train = _resize_target(
-        target_depth, target_mask, args.render_size
-    )
+    train_targets = {}
+    for name, view in views.items():
+        object_mask_np, support_mask_np = region_masks(
+            view["primitive_ids"], support_ids
+        )
+        depth, mask = _resize_target(view["depth"], view["mask"], args.render_size)
+        _, object_mask = _resize_target(
+            view["depth"],
+            torch.from_numpy(object_mask_np).to(device=device),
+            args.render_size,
+        )
+        _, support_mask = _resize_target(
+            view["depth"],
+            torch.from_numpy(support_mask_np).to(device=device),
+            args.render_size,
+        )
+        train_targets[name] = (depth, mask, object_mask, support_mask)
 
     anchors = sample_fixed_anchors(
         decoder, base_latent, args.num_gaussians, args.anchor_seed
     )
-    _, baseline_render, baseline_train_metrics = _render_metrics(
+    _, baseline_renders, baseline_train_metrics, baseline_train_views = _render_metrics(
         decoder,
         base_latent,
         anchors,
-        camera,
-        target_depth,
-        target_mask,
+        views,
         args.render_size,
         config,
     )
     print(
-        f"Training-view baseline loss: {baseline_train_metrics['spatial_loss']:.6f}",
+        f"Multi-view baseline loss: {baseline_train_metrics['spatial_loss']:.6f}",
         flush=True,
     )
-    del baseline_render
+    del baseline_renders
 
     best_loss = float("inf")
     best_latent = base_latent.detach().cpu().clone()
@@ -309,19 +358,53 @@ def main() -> None:
         gaussian = decode_fixed_anchors(
             decoder, latent, anchors, activation_checkpoint=True
         )
-        rendered = render_decoder_gaussian(
-            gaussian, camera, args.render_size, args.render_size
-        )
-        losses = spatial_loss_torch(
-            target_depth_train,
-            target_mask_train,
-            rendered.depth,
-            rendered.alpha,
-            config,
-        )
+        view_losses = {}
+        for name, view in views.items():
+            rendered = render_decoder_gaussian(
+                gaussian, view["camera"], args.render_size, args.render_size
+            )
+            (
+                target_depth_train,
+                target_mask_train,
+                object_mask_train,
+                support_mask_train,
+            ) = train_targets[name]
+            view_losses[name] = structure_loss_torch(
+                target_depth_train,
+                target_mask_train,
+                object_mask_train,
+                support_mask_train,
+                rendered.depth,
+                rendered.alpha,
+                config,
+            )
+        losses = {
+            key: torch.stack([item[key] for item in view_losses.values()]).mean()
+            for key in next(iter(view_losses.values()))
+        }
+        current_spatial_loss = float(losses["spatial_loss"].detach())
+        if current_spatial_loss < best_loss and np.isfinite(current_spatial_loss):
+            best_loss = current_spatial_loss
+            best_latent = latent.detach().cpu().clone()
+            best_anchor_seed = current_anchor_seed
         prior_loss = F.mse_loss(latent, base_latent)
         total_loss = losses["spatial_loss"] + args.prior_weight * prior_loss
-        total_loss.backward()
+        total_loss.backward(retain_graph=True)
+        nonfinite_gradient_values = 0
+        stable_gradient_fallback = False
+        stable_total_loss = None
+        if latent.grad is not None:
+            finite_gradient = torch.isfinite(latent.grad)
+            nonfinite_gradient_values = int((~finite_gradient).sum().item())
+            if nonfinite_gradient_values:
+                stable_gradient_fallback = True
+                optimizer.zero_grad(set_to_none=True)
+                stable_total_loss = (
+                    losses["whole_spatial_loss"] + args.prior_weight * prior_loss
+                )
+                stable_total_loss.backward()
+                if latent.grad is not None:
+                    latent.grad.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
         gradient_norm = torch.nn.utils.clip_grad_norm_(
             [latent], args.gradient_clip
         )
@@ -339,13 +422,17 @@ def main() -> None:
             "extent_loss": float(losses["extent_loss"].detach()),
             "prior_loss": float(prior_loss.detach()),
             "gradient_norm": float(gradient_norm),
+            "nonfinite_gradient_values": nonfinite_gradient_values,
+            "stable_gradient_fallback": stable_gradient_fallback,
+            "views": {
+                name: {
+                    key: float(value.detach())
+                    for key, value in item.items()
+                }
+                for name, item in view_losses.items()
+            },
         }
         history.append(record)
-        if record["spatial_loss"] < best_loss and np.isfinite(record["spatial_loss"]):
-            best_loss = record["spatial_loss"]
-            best_latent = latent.detach().cpu().clone()
-            best_anchor_seed = current_anchor_seed
-
         if step == 0 or (step + 1) % args.log_every == 0:
             peak_gib = torch.cuda.max_memory_allocated(device) / 1024**3
             print(
@@ -353,10 +440,20 @@ def main() -> None:
                 f"spatial={record['spatial_loss']:.6f} "
                 f"prior={record['prior_loss']:.6f} "
                 f"grad={record['gradient_norm']:.4f} "
+                f"nonfinite_grad={record['nonfinite_gradient_values']} "
+                f"fallback={record['stable_gradient_fallback']} "
                 f"peak_vram={peak_gib:.2f} GiB",
                 flush=True,
             )
-        del gaussian, rendered, losses, prior_loss, total_loss
+        del (
+            gaussian,
+            rendered,
+            losses,
+            view_losses,
+            prior_loss,
+            total_loss,
+            stable_total_loss,
+        )
 
     optimized_latent = best_latent.to(device=device)
     _save_tensors(
@@ -379,43 +476,35 @@ def main() -> None:
         decoder, optimized_latent, args.num_gaussians, fresh_seed
     )
 
-    base_fixed_g, base_fixed_r, base_fixed_m = _render_metrics(
+    base_fixed_g, base_fixed_r, base_fixed_m, base_fixed_views = _render_metrics(
         decoder,
         base_latent,
         fixed_anchors,
-        camera,
-        target_depth,
-        target_mask,
+        views,
         args.final_render_size,
         config,
     )
-    target_fixed_g, target_fixed_r, target_fixed_m = _render_metrics(
+    target_fixed_g, target_fixed_r, target_fixed_m, target_fixed_views = _render_metrics(
         decoder,
         optimized_latent,
         fixed_anchors,
-        camera,
-        target_depth,
-        target_mask,
+        views,
         args.final_render_size,
         config,
     )
-    base_fresh_g, base_fresh_r, base_fresh_m = _render_metrics(
+    base_fresh_g, base_fresh_r, base_fresh_m, base_fresh_views = _render_metrics(
         decoder,
         base_latent,
         fresh_base_anchors,
-        camera,
-        target_depth,
-        target_mask,
+        views,
         args.final_render_size,
         config,
     )
-    target_fresh_g, target_fresh_r, target_fresh_m = _render_metrics(
+    target_fresh_g, target_fresh_r, target_fresh_m, target_fresh_views = _render_metrics(
         decoder,
         optimized_latent,
         fresh_target_anchors,
-        camera,
-        target_depth,
-        target_mask,
+        views,
         args.final_render_size,
         config,
     )
@@ -423,12 +512,22 @@ def main() -> None:
     base_fresh_g.save_ply(scene_dir / "local_base_splat.ply")
     target_fresh_g.save_ply(scene_dir / "optimized_splat.ply")
     target_fresh_g.save_splat(scene_dir / "optimized_splat.splat")
-    _write_render_artifacts(
-        scene_dir, "local_base", base_fresh_r.depth, base_fresh_r.alpha
-    )
-    _write_render_artifacts(
-        scene_dir, "optimized", target_fresh_r.depth, target_fresh_r.alpha
-    )
+    for name, view in views.items():
+        suffix = "" if name == "isometric" else f"_{name}"
+        _write_render_artifacts(
+            scene_dir,
+            f"local_base{suffix}",
+            base_fresh_r[name].depth,
+            base_fresh_r[name].alpha,
+            view["boundary_path"],
+        )
+        _write_render_artifacts(
+            scene_dir,
+            f"optimized{suffix}",
+            target_fresh_r[name].depth,
+            target_fresh_r[name].alpha,
+            view["boundary_path"],
+        )
 
     summary = {
         "scene": scene_dir.name,
@@ -442,16 +541,39 @@ def main() -> None:
             "best_anchor_seed": best_anchor_seed,
             "fresh_anchor_seed": fresh_seed,
         },
-        "training_resolution_baseline": baseline_train_metrics,
+        "training_resolution_baseline": {
+            "aggregate": baseline_train_metrics,
+            "views": baseline_train_views,
+        },
         "fixed_anchors": {
             "base": base_fixed_m,
             "optimized": target_fixed_m,
             "relative_improvement": _improvement(base_fixed_m, target_fixed_m),
+            "views": {
+                name: {
+                    "base": base_fixed_views[name],
+                    "optimized": target_fixed_views[name],
+                    "relative_improvement": _improvement(
+                        base_fixed_views[name], target_fixed_views[name]
+                    ),
+                }
+                for name in views
+            },
         },
         "fresh_anchors": {
             "base": base_fresh_m,
             "optimized": target_fresh_m,
             "relative_improvement": _improvement(base_fresh_m, target_fresh_m),
+            "views": {
+                name: {
+                    "base": base_fresh_views[name],
+                    "optimized": target_fresh_views[name],
+                    "relative_improvement": _improvement(
+                        base_fresh_views[name], target_fresh_views[name]
+                    ),
+                }
+                for name in views
+            },
         },
         "best_training_spatial_loss": best_loss,
         "peak_vram_gib": torch.cuda.max_memory_allocated(device) / 1024**3,
@@ -459,7 +581,17 @@ def main() -> None:
     (scene_dir / "latent_optimization_summary.json").write_text(
         json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
     )
-    print(json.dumps(summary, indent=2, default=str), flush=True)
+    if args.print_summary_json:
+        print(json.dumps(summary, indent=2, default=str), flush=True)
+    else:
+        fresh = summary["fresh_anchors"]
+        print(
+            f"completed {scene_dir.name}: fresh structure "
+            f"{fresh['base']['structure_loss']:.4f} -> "
+            f"{fresh['optimized']['structure_loss']:.4f}; "
+            f"relative improvement {fresh['relative_improvement']:.1%}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

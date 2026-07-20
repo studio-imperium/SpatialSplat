@@ -1,0 +1,9 @@
+gradio==6.15.2
+torch
+torchvision
+numpy
+safetensors
+pillow
+tqdm
+huggingface_hub
+gsplat==1.5.3

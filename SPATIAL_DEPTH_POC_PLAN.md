@@ -1,4 +1,4 @@
-# SpatialSplat Isometric Depth POC Plan
+# SpatialSplat Multi-View Depth POC Plan
 
 ## Status
 
@@ -10,7 +10,7 @@ The POC asks one question:
 
 > Can a rich image generated from a primitive layout be mapped by TripoSplat to
 > a Gaussian splat whose coarse visible geometry agrees with the original
-> primitives from one fixed isometric viewpoint?
+> primitives from fixed isometric, top, left, right, front, and back viewpoints?
 
 The primitive scene is not the visual target. It is a coarse spatial contract.
 Generated texture, decoration, and small geometric details are allowed and
@@ -37,7 +37,13 @@ Implemented locally:
 - `training.decode_train`: frozen, fixed-anchor Gaussian decoder path with
   gradients to latent tokens and optional activation checkpointing.
 - `training.optimize_one_latent`: staged image encoding, Phase 2 sampling,
-  latent-only optimization, and fixed/fresh-anchor evaluation.
+  six-view latent-only optimization, and fixed/fresh-anchor evaluation.
+- `training.evaluate_lora_generation`: resumable paired base/LoRA normal
+  generation from fresh flow noise, normal Phase 1 decoding, six-view scoring,
+  and complete PLY/depth/alpha artifact export.
+- `training.multiview`: deterministic isometric, top, left, right, front, and
+  back supervision
+  cameras plus exact primitive depth, mask, and boundary targets.
 - `training.validate_gsplat_renderer`: CPU/CUDA renderer parity gate.
 - `training.evaluate_spatial`: command-line metric evaluator.
 - `training.generate_baselines`: A6000 batch runner for cached image features,
@@ -52,7 +58,8 @@ Implemented locally:
 - `training.score_baselines`: per-scene metrics plus an aggregate baseline
   summary.
 - Unit tests for primitive rendering, score behavior, NumPy/Torch agreement,
-  and finite gradients to predicted depth and alpha.
+  finite gradients to predicted depth and alpha, multi-view cameras, and the
+  pseudo-target quality gate.
 
 Verified score behavior on the center-cube scene:
 
@@ -110,11 +117,162 @@ Completed on a RunPod A40:
   `2.81` GiB peak VRAM. The final 15 MB adapter, ten 100-step checkpoints,
   history, configuration, and summary are under `poc_data/lora_run/`.
 
+This first adapter is retained as a diagnostic artifact, but it is not the
+clean training result. Visual review found three flipped or rotated targets,
+and the original improvement-only acceptance gate allowed them into training.
+
+Multi-view correction run:
+
+- Added equal-weight isometric, top, and side depth/alpha supervision to every
+  latent-optimization step while keeping Phase 1 frozen.
+- Added fresh-anchor per-view metrics and a strict pseudo-target gate. A target
+  must improve, keep IoU from regressing, have worst-view soft IoU at least
+  `0.80`, worst-view median normalized depth error at most `0.15`, and
+  worst-view P95 normalized depth error at most `0.20`.
+- The P95 gate rejects the known flipped scenes from the original isometric
+  run: Cube Sphere, Three Step, and Diagonal Pair.
+- The full three-view run revealed hidden geometry errors that the isometric
+  viewer could not show. Four targets currently pass all views: Center Cube,
+  Center Sphere, Front/Back, and Pillars.
+- A replacement LoRA is trained only from these clean targets and is written to
+  `poc_data/lora_run_multiview/`; its manifest is
+  `poc_data/lora_dataset_multiview.json`.
+- The clean rank-8 LoRA completed 1,000 steps over four accepted pairs in
+  `1,969` seconds with `2.68` GiB peak VRAM. Fixed-probe flow loss improved
+  from `0.43729` to `0.39577` (`9.49%`). The final adapter and ten 100-step
+  checkpoints are downloaded locally.
+
+Six-view extension:
+
+- Expanded optimization and fresh-anchor gating to isometric, top, left,
+  right, front, and back. The three-view adapter remains as a comparison
+  artifact.
+- Re-optimized all ten latents for 60 steps. Center Sphere and Pillars narrowly
+  missed the gate, then passed after a targeted 180-step retry. The final clean
+  set remains Center Cube (`0.161` worst-view P95), Center Sphere (`0.135`),
+  Front/Back (`0.173`), and Pillars (`0.191`).
+- Trained a separate rank-8 LoRA for 1,000 steps from those four six-view
+  targets. Fixed-probe flow loss improved from `0.44628` to `0.40218`
+  (`9.88%`) with `2.68` GiB peak VRAM.
+- The six-view manifest is `poc_data/lora_dataset_six_view.json`. The final
+  adapter and ten checkpoints are under `poc_data/lora_run_six_view/`.
+- Evaluation-only camera checks are not treated as training supervision; all
+  six cameras participate in the latent-optimization gradient.
+
+Fresh-generation stress test:
+
+- Evaluated base and six-view LoRA normal generation with paired flow-noise
+  seeds `101`, `202`, and `303` on all four accepted scenes. Each pair used the
+  same cached image conditioning, initial noise, and a newly sampled matching
+  octree seed before six-view scoring.
+- The LoRA beat base on all 12 pairs. Mean spatial loss fell from `0.26827` to
+  `0.11836`, a `52.0%` relative improvement.
+- The LoRA recovered `64.5%` of the optimized-target improvement on average,
+  exceeding the predeclared `50%` Phase 4 criterion.
+- Per-scene mean spatial-loss improvements were Center Cube `70.0%`, Center
+  Sphere `48.8%`, Front/Back `65.9%`, and Pillars `34.5%`.
+- This is a **Phase 4 POC pass for trainability/memorization**. It is not yet a
+  generalization result because these are fresh samples of the four training
+  conditions, not unseen primitive layouts.
+- Worst-view depth tails remain imperfect. Mean aggregate P95 improved on three
+  scenes, but Center Sphere changed from `1.043` to `1.051`, and most generated
+  samples remain above the strict `0.20` pseudo-target gate. The adapter has
+  learned the broad geometry far better without eliminating every local depth
+  outlier.
+- Complete results and visual artifacts are under
+  `poc_data/fresh_generation_six_view/` and can be inspected in
+  `poc_viewer.html` as Fresh base versus Fresh LoRA.
+
+Held-out generalization test:
+
+- Added three scenes under `poc_data/heldout/` that were never used for latent
+  optimization or LoRA training: Archway, Raised Table, and Diagonal
+  Procession. Each has a new generated condition image and exact six-view
+  primitive targets.
+- The first held-out run was preprocessing-confounded: BiRefNet removed the
+  entire platform from Raised Table and inconsistently removed spatial context
+  from the other RGB inputs, while the exact targets still included it. Those
+  diagnostic artifacts remain under `poc_data/heldout_generation_six_view/`
+  but are not the final generalization result.
+- Added alpha-safe input handling. `training.generate_baselines` can now require
+  real alpha and records whether background removal ran; held-out inputs use
+  `--require-alpha --erode-radius 0`. The corrected prepared images preserve
+  the complete platform and skip BiRefNet.
+- Re-evaluated three paired fresh-noise seeds per scene. The LoRA won `8/9`
+  pairs. Mean spatial loss changed from `0.40890` to `0.31027`, a `15.27%`
+  average improvement, and median pair improvement was `7.19%`.
+- Archway improved `39.4%` but retained one bad seed, Raised Table improved
+  `12.3%` and won all three seeds, and Diagonal Procession improved `4.6%` and
+  won all three seeds.
+- This is **early positive generalization evidence**, not a final pass. Only
+  three layouts were tested, absolute P95 tails remain high, and Archway is
+  still seed-sensitive. The result justifies scaling target diversity before
+  changing architecture.
+- Corrected artifacts are under
+  `poc_data/heldout_alpha_generation_six_view/` and are selectable in
+  `poc_viewer.html` as Fresh base versus Fresh LoRA.
+
+Structural scoring correction for the scaled dataset:
+
+- Do not let a large correct floor/platform hide a wrong object orientation.
+  Score support surfaces and non-support objects as separate channels using
+  `primitive_ids.npy`; the object channel excludes the ground primitive.
+- Treat object position, scale, and orientation as hard gates rather than only
+  terms in an average. Each view must pass object-mask bounding-box IoU,
+  centroid, and extent checks. An asymmetric depth/occupancy signature across
+  the six views must reject mirrored or 180-degree-wrong layouts.
+- Score floors and table-like supports separately using visible height error,
+  plane residual/flatness, and P95 depth error. These terms should strongly
+  penalize warped surfaces without requiring generated decorative detail to
+  match the primitive proxy.
+- Aggregate views with a worst-view or upper-tail term in addition to the mean.
+  A candidate that fails any orientation/placement gate is excluded from LoRA
+  training even if its overall spatial score looks acceptable.
+
+Diverse 50-scene scaffold:
+
+- Added `training.generate_diverse_data` and generated 50 new primitive
+  contracts under `poc_data/diverse_train/` without consuming image-generation
+  quota.
+- The split contains 35 grounded scenes across woodland, desert, rock, snow,
+  ruins, gardens, and industry, plus 15 floorless robots, ordinary objects, and
+  abstract structures.
+- Each scene includes exact primitive RGB/depth/mask/boundary artifacts, a
+  material-aware image prompt, a chroma-key choice, and a condition spec that
+  requires real alpha.
+- Added `training.add_condition_alpha` for preserving existing rendered RGB
+  pixels while removing only border-connected neutral backgrounds.
+- Added `training.generate_controlnet_images`, a separate SDXL bulk-generation
+  harness using exact primitive depth plus boundary ControlNets. It records
+  model IDs, seeds, control strengths, runtime, and alpha coverage. The default
+  command is a ten-scene diversity pilot; `--all` expands it to all 50 after
+  visual review.
+- Generated all 50 rich condition images with SDXL img2img plus depth and
+  boundary ControlNets. The primitive RGB proxy is placed on white as the
+  img2img start, so texture can change while orientation, object positions,
+  scale, bounding boxes, and support heights remain controlled throughout
+  denoising.
+- Default generation settings are 768 x 768, seed sequence starting at 24000,
+  40 steps, strength 0.95, depth scale 0.95, and boundary scale 0.85. The one
+  initial outlier (`04_fallen_log`) invented a large plume and was regenerated
+  successfully at strength 0.82.
+- RGBA uses border-connected neutral-background removal plus the exact control
+  subject mask as a protected minimum. This prevents white snow/floor/table
+  surfaces from disappearing while still retaining generated detail outside
+  the primitive silhouette.
+- The final audit has 50/50 RGB, RGBA, and metadata records. Visual review found
+  no remaining wrong orientations or missing support surfaces. The largest
+  excess alpha footprint is 3.74% over its target (`37_robot_rover`); all other
+  scenes are lower. Results and `generation_audit.json` are under
+  `poc_data/diverse_train/`.
+- On the cached A40, generation took about 7.7-8.2 seconds per image. The full
+  setup, pilot, 50-image run, correction, download, and audit session ran for
+  29m43s, about $0.218 of GPU compute at $0.44/hour. The stopped pod retains
+  `/root/imagegen-venv` and `/root/hf-cache` for later runs.
+
 Pending POC work:
 
-- Run normal generation from fresh flow-noise seeds through base and selected
-  LoRA checkpoints, then decode with fresh octree anchors and score spatially.
-- Record the Phase 4 pass/fail decision before increasing data or architecture.
+- Increase pseudo-target diversity before claiming spatial generalization.
 
 Local setup and verification:
 
@@ -129,14 +287,40 @@ uv pip install --python .venv/bin/python -r requirements-poc.txt
 .venv/bin/python -m training.validate_gsplat_renderer --scene-dir poc_data/01_center_cube
 .venv/bin/python -m training.optimize_one_latent \
   --scene-dir poc_data/01_center_cube \
-  --optimization-steps 60 --render-size 256 --final-render-size 512
+  --optimization-steps 60 --render-size 256 --final-render-size 512 \
+  --views isometric top left right front back
 .venv/bin/python -m training.optimize_latent_batch \
   --data-root poc_data --checkpoint-root ckpts
 .venv/bin/python -m training.build_lora_dataset \
-  --data-root poc_data --output poc_data/lora_dataset.json
+  --data-root poc_data --output poc_data/lora_dataset_six_view.json \
+  --max-p95-depth-error 0.20 --allow-rejected
 .venv/bin/python -m training.train_flow_lora \
-  --manifest poc_data/lora_dataset.json --checkpoint-root ckpts \
-  --output-dir poc_data/lora_run --steps 1000
+  --manifest poc_data/lora_dataset_six_view.json --checkpoint-root ckpts \
+  --output-dir poc_data/lora_run_six_view --steps 1000
+.venv/bin/python -m training.evaluate_lora_generation \
+  --manifest poc_data/lora_dataset_six_view.json --checkpoint-root ckpts \
+  --lora poc_data/lora_run_six_view/flow_lora.safetensors \
+  --output-dir poc_data/fresh_generation_six_view \
+  --seed 101 --seed 202 --seed 303
+.venv/bin/python -m training.generate_poc_data \
+  --output poc_data/heldout --split heldout --resolution 512
+# Add heldout/*/generated_image.png, then on the CUDA machine:
+.venv/bin/python -m training.generate_baselines \
+  --data-root poc_data/heldout_alpha --checkpoint-root ckpts \
+  --require-alpha --erode-radius 0
+.venv/bin/python -m training.evaluate_lora_generation \
+  --data-root poc_data/heldout_alpha --checkpoint-root ckpts \
+  --lora poc_data/lora_run_six_view/flow_lora.safetensors \
+  --output-dir poc_data/heldout_alpha_generation_six_view \
+  --seed 101 --seed 202 --seed 303
+.venv/bin/python -m training.generate_diverse_data \
+  --output poc_data/diverse_train --resolution 512
+# On the CUDA image-generation environment:
+.venv/bin/python -m training.generate_controlnet_images
+# Expand only after the ten-scene visual audit:
+.venv/bin/python -m training.generate_controlnet_images --all
+# Rebuild transparent outputs without loading diffusion weights:
+.venv/bin/python -m training.generate_controlnet_images --all --alpha-only
 # Current remote baseline path, which does not require local CUDA:
 .venv/bin/python -m training.generate_remote_baselines --data-root poc_data
 .venv/bin/python -m training.render_baseline_depths --data-root poc_data
@@ -154,8 +338,8 @@ Primitive scene
     -> latent tokens
     -> frozen Phase 1 Gaussian decoder
     -> Gaussian splat
-    -> depth and alpha from the same isometric camera
-    -> coarse spatial score against exact primitive depth and mask
+    -> depth and alpha from fixed isometric, top, left, right, front, and back cameras
+    -> mean spatial loss plus per-view quality gates against exact primitives
 ```
 
 The target primitive depth is deterministic. A Gaussian renderer must combine
@@ -221,8 +405,8 @@ Paper: <https://arxiv.org/abs/2605.16355>
   `torch.no_grad`.
 - The released model does not provide authoritative latent targets for new GLB
   or primitive scenes.
-- A one-view depth score cannot supervise hidden geometry. This POC evaluates
-  visible isometric alignment only.
+- Six fixed depth views constrain substantially more geometry than the first
+  one-view experiment, but they still do not provide complete 3D supervision.
 - Fine appearance cannot be learned from primitive depth. Appearance should be
   preserved from the pretrained model and the rich generated input.
 - Ten examples cannot demonstrate generalization. This is a memorization and
@@ -236,7 +420,6 @@ Paper: <https://arxiv.org/abs/2605.16355>
 The first POC does not include:
 
 - ControlNet or direct GLB conditioning inside TripoSplat.
-- Multiple supervision cameras.
 - Full 3D SDF supervision.
 - Phase 1 weight updates.
 - Full Phase 2 fine-tuning.
@@ -402,7 +585,7 @@ Suggested initial settings are deliberately conservative:
 - Adam over latent only.
 - 100 to 300 steps.
 - One example at a time.
-- Fixed scoring camera.
+- Six fixed scoring cameras with equal loss weight.
 - Anchor resampling every 10 to 25 steps.
 - Save the lowest-loss latent, not merely the final latent.
 
@@ -412,7 +595,12 @@ First run one example. Then run all ten only if the first example passes.
 
 The example passes when:
 
-- Coarse depth and mask metrics improve materially.
+- Aggregate coarse depth and mask metrics improve by at least 10%.
+- All isometric, top, left, right, front, and back fresh-anchor evaluations are
+  present.
+- Worst-view P95 normalized depth error is at most `0.20`.
+- Worst-view median normalized depth error is at most `0.15`.
+- Worst-view soft mask IoU is at least `0.80` and does not regress.
 - The result does not become transparent or empty.
 - A normal decoder call with newly sampled anchors retains the improvement.
 - The rich input's broad appearance remains recognizable.
@@ -424,8 +612,9 @@ base camera token as `target_camera.safetensors` for the initial POC.
 
 ## Phase 4: Phase 2 LoRA Stress Test
 
-This phase tests whether Phase 2 can learn the ten image-to-improved-latent
-mappings. It is intentionally allowed to memorize all ten examples.
+This phase tests whether Phase 2 can learn the accepted
+image-to-improved-latent mappings. It is intentionally allowed to memorize the
+small clean subset.
 
 ### Trainable and Frozen Components
 
@@ -474,7 +663,7 @@ For every training image:
 1. Run base TripoSplat from several fresh noise seeds.
 2. Run the LoRA model from the same fresh seeds.
 3. Decode normally with newly sampled octree anchors.
-4. Render both from the fixed isometric scoring camera.
+4. Render both from all six fixed scoring cameras.
 5. Compare both against the exact primitive depth and mask.
 
 Report:
@@ -606,6 +795,8 @@ differentiable rasterizer is `gsplat==1.5.3`.
 - [x] Reproduce base inference through the hosted TripoSplat service.
 - [x] Generate all ten primitive/GPT-image artifact bundles.
 - [x] Calibrate the fixed isometric scoring camera.
+- [x] Add deterministic top and side scoring cameras.
+- [x] Add deterministic left, right, front, and back scoring cameras.
 - [x] Render baseline splat depth and alpha.
 - [x] Verify spatial score perturbation tests.
 - [x] Verify nonzero finite gradients from depth loss to latent tokens.
@@ -613,8 +804,15 @@ differentiable rasterizer is `gsplat==1.5.3`.
 - [x] Generate and optimize all ten examples.
 - [x] Add rank-8 Phase 2 LoRA.
 - [x] Overfit the ten pseudo-target latents with flow matching.
-- [ ] Evaluate fresh-noise LoRA outputs against base and target.
-- [ ] Record pass/fail decision before increasing dataset size or architecture.
+- [x] Reject stale one-view and high-P95 pseudo-targets.
+- [x] Overfit the clean multi-view pseudo-target subset with flow matching.
+- [x] Re-optimize and retrain with six-view supervision.
+- [x] Evaluate fresh-noise LoRA outputs against base and target.
+- [x] Record pass/fail decision before increasing dataset size or architecture.
+- [x] Evaluate three entirely held-out generated-image/primitive layouts.
+- [x] Correct the held-out alpha/preprocessing confound and rerun all pairs.
+- [x] Record early positive but still limited held-out generalization.
+- [x] Scaffold 50 diverse grounded and floorless primitive contracts.
 
 ## Decision After the POC
 
@@ -627,7 +825,187 @@ flow/camera objectives, and sampling before adding more data.
 If both pass, scale in this order:
 
 1. Add held-out primitive arrangements.
-2. Add multiple scoring cameras.
+2. Add randomized oblique camera sampling or direct 3D supervision.
 3. Add exact SDF and octree surface supervision.
 4. Add varied generated-image styles.
 5. Evaluate a direct 3D spatial-control adapter.
+
+## Diverse Final-LoRA Run (2026-07-18)
+
+This is the active end-to-end run over the 50 diverse ControlNet-generated
+conditions in `poc_data/diverse_train`.
+
+### Frozen split
+
+`training.create_data_split` writes `poc_data/diverse_train/split.json` once.
+Each of the ten semantic categories contributes four training scenes. Its fifth
+scene alternates between validation and test, producing a disjoint 40/5/5
+split. The test five are not inspected by candidate selection, latent
+optimization, target filtering, checkpoint selection, or hyperparameter
+selection.
+
+### Structure-first evaluator
+
+Primitive IDs divide each target render into:
+
+- object geometry: every non-ground primitive;
+- support geometry: primitives explicitly named `ground`, `floor`, or
+  `terrain`;
+- the whole scene as a low-weight guardrail.
+
+The differentiable latent objective weights object, support, and whole-scene
+losses `1.0`, `0.5`, and `0.15`. The evaluator reports object P95 depth,
+object mask IoU, object bounding-box IoU, centroid, extent, signal ratio,
+support P95 depth, support coverage, and support flatness. Six directional
+views are mandatory.
+
+The default hard target gate requires object P95 depth at most `0.20`, object
+soft IoU at least `0.65`, bounding-box IoU at least `0.49`, centroid error at
+most `0.10`, extent error at most `0.12`, and signal ratio at least `0.70`.
+Grounded scenes additionally require support P95 at most `0.20`, support
+flatness error at most `0.08`, and support coverage at least `0.70`. An
+optimized target must retain at least 90% of its base object signal.
+
+Synthetic tests prove that a large correct floor cannot hide flipped or
+shifted objects, and that weak-signal objects and warped floors fail. The same
+gate also separates the known good and bad examples from the original
+ten-scene experiment.
+
+### Candidate and target generation
+
+For every train/validation condition, Phase 2 samples seeds 41-44. Each sample
+is decoded with the same octree seed and scored in six views. Gross
+orientation, bounding box, centroid, extent, and signal checks rank ahead of
+raw loss. Failed scenes receive one second four-seed bank; a final failure is
+excluded.
+
+The selected base latent is then optimized against the object/support-weighted
+six-view objective while Phase 1 remains frozen. A fresh octree sample, not the
+optimization anchors, determines target acceptance. Failed targets receive one
+longer retry and are then excluded. The desired minimum is 30 balanced accepted
+training targets for a later production-scale pass. This POC was allowed to
+continue with fewer targets so that the full generalization test could be run
+before paying to generate and optimize another dataset.
+
+### LoRA selection and final test
+
+Two rank-8 LoRA candidates use the accepted training split with learning rates
+`1e-4` and `5e-5`. Paired fresh generations on the five validation scenes
+select the lower structure-loss candidate, with P95 depth as the primary
+diagnostic. The selected settings are retrained from the base model on accepted
+train plus validation targets.
+
+The final adapter is evaluated once on the five untouched test conditions with
+paired seeds 101, 202, and 303. The package includes the adapter, config,
+training history, split, accepted manifests, base/LoRA splats, six-view metrics,
+and viewer-compatible artifacts.
+
+### Executed result
+
+The run completed end to end on the A40 RunPod instance:
+
+- 50 diverse primitive contracts were split into 40 train, 5 validation, and 5
+  untouched test scenes.
+- Candidate generation found a viable starting orientation for 42 of the 45
+  train/validation scenes. `32_pipe_cluster`, `39_flying_drone`, and
+  `47_orbit_sculpture` were rejected before latent optimization.
+- Six-view latent optimization produced 15 accepted training targets and 3
+  accepted validation targets. The final adapter therefore trained on 18
+  pseudo-targets.
+- Two rank-8, alpha-8 candidates trained for 600 steps. On 10 paired validation
+  generations, learning rate `1e-4` improved mean structure loss by 15.56% and
+  learning rate `5e-5` improved it by 14.27%. The `5e-5` candidate won P95 depth
+  on 7/10 pairs versus 6/10, so it was selected because tail depth was the
+  stated priority.
+- The selected settings were retrained from the untouched base for 800 steps on
+  all 18 accepted train/validation targets. The fixed training probe improved
+  from `0.6298` to `0.5270` structure loss, a 16.33% reduction.
+
+The one-time final test used Palm Oasis, Igloo, Garden Bench, Cylinder Droid,
+and Asymmetric Sculpture with paired seeds 101, 202, and 303. Across all 15
+pairs, mean structure loss fell from `0.6572` to `0.5463`, a mean relative
+improvement of 14.36%. The LoRA won 13/15 structure comparisons, and every test
+scene improved when averaged over its three seeds.
+
+P95 depth was less conclusive: its mean was effectively flat (`1.2676` base,
+`1.2671` LoRA), although the LoRA won 10/15 individual P95 comparisons. This is
+a positive proof that Phase 2 LoRA training can transfer the optimized spatial
+targets to unseen conditions, but it is not yet a solved tail-geometry model.
+The next run should increase accepted-target diversity and put more direct
+weight on worst-view P95 failures before increasing LoRA capacity.
+
+Final artifacts:
+
+- adapter: `poc_data/diverse_lora_final/flow_lora.safetensors`
+- training record: `poc_data/diverse_lora_final/train_summary.json`
+- frozen split and accepted sets: `poc_data/diverse_train/split.json` and
+  `poc_data/diverse_train/lora_*_manifest.json`
+- untouched test metrics and splats: `poc_data/diverse_test_final`
+- visual comparison: `poc_viewer.html`, under the `Final untouched test` scene
+  group with `Fresh base` and `Fresh LoRA`
+
+## Primitive Geometry Adapter Run (2026-07-19)
+
+The first ControlNet-style Phase 2 adapter is implemented in
+`spatial_control.py`. It converts each primitive contract into 12 analytic SDF
+features at TripoSplat's 8,192 fixed Sobol token positions, then injects
+zero-initialized residuals into six frozen flow-transformer blocks at every
+sampling step. Phase 1 remains unchanged. The adapter has 1,209,600 trainable
+parameters and can be composed with the existing rank-8 LoRA.
+
+The strict six-view target gate accepted seven training scenes and two held-out
+validation scenes. The adapter trained for 600 steps at `1e-4`, with LoRA
+enabled on half of the steps so both deployment combinations remained usable.
+Training took 1,016 seconds on an A40 and peaked at 2.72 GiB VRAM.
+
+The base held-out latent-flow probe fell from `0.6827` to `0.5907`. The LoRA
+probe was flat (`0.5769` to `0.5770`), and a shuffled control scored `0.5908`,
+which warns that this small adapter still contains a substantial generic
+correction rather than proven scene-specific control.
+
+The paired fresh-generation test used seed 101 on held-out Pillars and Crate
+Yard. Every mode received the same encoded image and exact Phase 2 noise.
+Geometry Control beat Base on both scenes: mean six-view structure loss fell
+from `0.1051` to `0.0942`, mean worst-view P95 depth fell from `0.4519` to
+`0.3971`, and mean minimum soft IoU rose from `0.8629` to `0.8758`. Combined
+LoRA plus control improved structure loss to `0.0988`, but won only one of the
+two scene pairs. More diverse accepted targets and shuffled-control
+regularization are the next training priorities.
+
+Final artifacts:
+
+- adapter and training record: `poc_data/spatial_control_run`
+- paired four-way splats and six-view metrics:
+  `poc_data/control_generation_eval`
+- train and validation manifests: `poc_data/control_train_manifest.json` and
+  `poc_data/control_validation_manifest.json`
+- hosted comparison: `https://huggingface.co/spaces/WilliamQM/Spatial-Splat`
+
+## Ultra-Low-Rank Probe (2026-07-19)
+
+A fixed output-latent basis was tested first using the four accepted original
+six-view target corrections. Although rank four reconstructs those four
+training corrections exactly, it retained usually less than 1% of the fresh
+LoRA correction energy. Final latent coordinates therefore did not behave like
+a reusable set of global transform controls in this small probe.
+
+The deployable alternative compresses every trained rank-8 LoRA layer with a
+truncated SVD. Effective rank two retains 87.60% of the total learned
+matrix-update energy while reducing the adapter from 3,670,016 to 917,504
+parameters. This is a compression experiment, not evidence that the retained
+directions exclusively control position, rotation, and scale.
+
+Artifacts:
+
+- compressor: `training/compress_lora.py`
+- rank-2 adapter: `poc_data/diverse_lora_rank2`
+- five-way hosted test: Base, rank-8 LoRA, rank-2 LoRA, Geometry Control, and
+  rank-8 LoRA plus Geometry Control
+
+The first hosted five-way smoke test used Cylinder Droid, seed 42, 20 flow
+steps, and 32,768 Gaussians. Rank two closely reproduced rank eight but did not
+improve it: structure loss was `0.7901` versus `0.7834`, and worst-view object
+P95 was `1.0925` versus `1.0779`. Base scored `0.6384`; Geometry Control was
+best at `0.5901`. Simple weight compression therefore preserves much of the
+LoRA behavior but does not isolate a quality-preserving transform mechanism.
+The complete record is `poc_data/rank2_space_smoke/spatial_metrics.json`.

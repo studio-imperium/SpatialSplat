@@ -1,0 +1,113 @@
+{
+  "scene_id": "61_cactus_desert",
+  "description": "A sandy desert plot with two branching cacti and scattered rocks.",
+  "camera": {
+    "position": [1.7, 1.45, 1.7],
+    "target": [0.0, -0.08, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "ortho_scale": 1.45,
+    "width": 512,
+    "height": 512
+  },
+  "primitives": [
+    {
+      "name": "ground",
+      "kind": "box",
+      "center": [0.0, -0.455, 0.0],
+      "size": [1.08, 0.07, 1.0],
+      "color": [201, 161, 92],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "large_cactus_trunk",
+      "kind": "cylinder",
+      "center": [-0.22, -0.16, -0.08],
+      "size": [0.13, 0.52, 0.13],
+      "color": [54, 126, 75],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "large_cactus_left_arm",
+      "kind": "cylinder",
+      "center": [-0.32, -0.17, -0.08],
+      "size": [0.09, 0.22, 0.09],
+      "color": [58, 132, 78],
+      "yaw_degrees": 0.0,
+      "rotation_degrees": [0.0, 0.0, 90.0]
+    },
+    {
+      "name": "large_cactus_left_tip",
+      "kind": "cylinder",
+      "center": [-0.42, -0.08, -0.08],
+      "size": [0.09, 0.22, 0.09],
+      "color": [61, 137, 81],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "large_cactus_right_arm",
+      "kind": "cylinder",
+      "center": [-0.11, -0.05, -0.08],
+      "size": [0.08, 0.2, 0.08],
+      "color": [58, 132, 78],
+      "yaw_degrees": 0.0,
+      "rotation_degrees": [0.0, 0.0, 90.0]
+    },
+    {
+      "name": "large_cactus_right_tip",
+      "kind": "cylinder",
+      "center": [-0.02, 0.02, -0.08],
+      "size": [0.08, 0.18, 0.08],
+      "color": [61, 137, 81],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "small_cactus_trunk",
+      "kind": "cylinder",
+      "center": [0.28, -0.25, 0.17],
+      "size": [0.11, 0.34, 0.11],
+      "color": [49, 119, 70],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "small_cactus_arm",
+      "kind": "cylinder",
+      "center": [0.36, -0.23, 0.17],
+      "size": [0.075, 0.16, 0.075],
+      "color": [55, 129, 75],
+      "yaw_degrees": 0.0,
+      "rotation_degrees": [0.0, 0.0, 90.0]
+    },
+    {
+      "name": "small_cactus_tip",
+      "kind": "cylinder",
+      "center": [0.43, -0.16, 0.17],
+      "size": [0.075, 0.17, 0.075],
+      "color": [58, 134, 78],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "rock_a",
+      "kind": "sphere",
+      "center": [0.23, -0.37, -0.25],
+      "size": [0.14, 0.14, 0.14],
+      "color": [129, 111, 91],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "rock_b",
+      "kind": "sphere",
+      "center": [0.39, -0.39, -0.18],
+      "size": [0.1, 0.1, 0.1],
+      "color": [151, 126, 96],
+      "yaw_degrees": 0.0
+    },
+    {
+      "name": "rock_c",
+      "kind": "sphere",
+      "center": [-0.32, -0.39, 0.29],
+      "size": [0.11, 0.11, 0.11],
+      "color": [137, 115, 89],
+      "yaw_degrees": 0.0
+    }
+  ]
+}
